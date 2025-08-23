@@ -6,7 +6,7 @@ on:
       target:
         description: '编译目标'
         required: true
-        default: 'zn-m2'
+        default: 'ipq6000'  # ZN-M2 设备专用目标
 
 jobs:
   build:
@@ -14,43 +14,30 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
-        with:
-          repository: OpenWrt/OpenWrt  # 添加仓库地址
-          ref: master                 # 或其他需要的分支
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git device-tree-compiler
-          
-      - name: Upload Device Tree
-        uses: actions/upload-artifact@v2
-        with:
-          name: zn-m2.dts
-          path: zn-m2.dts
-        if: github.event.inputs.target == 'zn-m2'
+          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git
 
       - name: Configure Device Tree
         run: |
-          # 将设备树文件复制到正确位置
-          mkdir -p targets/ipq60xx/dts/
-          cp zn-m2.dts targets/ipq60xx/dts/zn-m2.dts
-
-      - name: Update Feeds
-        run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Generate .config
-        run: |
-          make defconfig
+          mkdir -p targets/ipq60xx/configs
+          echo "CONFIG_TARGET_ipq60xx=y" >> targets/ipq60xx/configs/zn-m2_defconfig
+          echo "CONFIG_TARGET_ipq60xx_generic=y" >> targets/ipq60xx/configs/zn-m2_defconfig
+          echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> targets/ipq60xx/configs/zn-m2_defconfig
 
       - name: Compile Firmware
         run: |
-          make -j$(nproc) V=s target=$target
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make -j$(nproc) V=s
 
-      - name: Upload Firmware
-        uses: actions/upload-artifact@v2
+      - name: Upload Firmware  # 新增下载链接步骤
+        uses: actions/upload-artifact@v3
         with:
-          name: openwrt-firmware
-          path: bin/targets/*/*
+          name: zn-m2-firmware  # 下载时显示的名称
+          path: |
+            ./bin/targets/ipq6000/*/*  # ZN-M2编译产物路径（根据实际输出调整）
+            ./bin/configs/zn-m2_defconfig  # 可选：上传配置文件
+          retention-days: 14  # 保留14天
