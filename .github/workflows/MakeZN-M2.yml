@@ -1,0 +1,44 @@
+name: Build ZN-M2 OpenWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '编译目标'
+        required: true
+        default: 'ipq6000'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4  # 升级到 v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git
+
+      - name: Configure Device Tree
+        run: |
+          mkdir -p targets/ipq60xx/configs
+          echo "CONFIG_TARGET_ipq60xx=y" >> targets/ipq60xx/configs/zn-m2_defconfig
+          echo "CONFIG_TARGET_ipq60xx_generic=y" >> targets/ipq60xx/configs/zn-m2_defconfig
+          echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> targets/ipq60xx/configs/zn-m2_defconfig
+
+      - name: Compile Firmware
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make -j$(nproc) V=s
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4  # 必须使用 v4
+        with:
+          name: zn-m2-firmware-${{ github.sha }}  # 唯一名称（避免冲突）
+          path: |
+            ./bin/targets/ipq6000/*/*  # 确保路径正确
+            ./bin/configs/zn-m2_defconfig
+          retention-days: 14  # 保留14天
+          if-no-files-found: error  # 强制检查文件存在
