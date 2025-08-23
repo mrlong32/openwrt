@@ -22,7 +22,6 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-sudo apt-get update
 sudo apt-get install -y build-essential  # 先装基础包
 sudo apt-get install -y libncurses5-dev
 sudo apt-get install -y libncursesw5-dev  # 重点检查此包
