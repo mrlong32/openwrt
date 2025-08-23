@@ -43,4 +43,3 @@ jobs:
             ./bin/configs/zn-m2_defconfig
           retention-days: 14  # 保留14天
           if-no-files-found: error  # 强制检查文件存在          
-
