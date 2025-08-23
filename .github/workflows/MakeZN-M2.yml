@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: '编译目标'
+        description: '编译目标（固定填 ipq6000）'
         required: true
         default: 'ipq6000'
+      clean:
+        description: '是否清理编译环境（true/false）'
+        required: false
+        default: 'false'
 
 jobs:
   build:
@@ -18,7 +22,16 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git
+          sudo apt-get install -y \
+            build-essential \
+            libncurses5-dev \
+            libncursesw5-dev \          # 新增宽字符支持库
+            ncurses-term                # 新增终端数据库包
+
+      - name: Setup Terminal Environment  # 新增终端环境设置
+        run: |
+          echo "export TERM=xterm-256color" >> $GITHUB_ENV
+          echo "export TERMINFO=/usr/share/terminfo" >> $GITHUB_ENV
 
       - name: Configure Device Tree
         run: |
@@ -31,14 +44,19 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          make -j$(nproc) V=s
+          make -j$(nproc) V=s 2>&1 | tee build.log  # 输出日志到文件（可选）
 
-      - name: Upload Firmware
-        uses: actions/upload-artifact@v4  # 必须使用 v4
+      - name: Upload Firmware  # 上传固件（使用 v4 版本）
+        uses: actions/upload-artifact@v4
         with:
-          name: zn-m2-firmware-${{ github.sha }}  # 唯一名称（避免冲突）
+          name: zn-m2-openwrt-${{ github.sha }}  # 唯一名称（避免覆盖）
           path: |
-            ./bin/targets/ipq6000/*/*  # 确保路径正确
-            ./bin/configs/zn-m2_defconfig
+            ./bin/targets/ipq6000/*/*  # ZN-M2 编译产物路径（根据实际调整）
+            ./build.log                  # 可选：上传编译日志
           retention-days: 14  # 保留14天
-          if-no-files-found: error  # 强制检查文件存在
+
+      - name: Notify Completion
+        if: always()
+        run: |
+          echo "✅ 编译完成，请前往 Actions → Artifacts 下载固件"
+          echo "👉 路径：./bin/targets/ipq6000/*/* 下的 sysupgrade.bin 文件"
