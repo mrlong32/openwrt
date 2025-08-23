@@ -1,44 +1,53 @@
 name: Build ZN-M2 OpenWrt
 
 on:
-  workflow_dispatch:
-    inputs:
-      target:
-        description: '编译目标'
-        required: true
-        default: 'ipq6000'  # ZN-M2 设备专用目标
+  workflow_dispatch:  # 手动触发编译
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Source
+      - name: 拉取源码和你的自定义文件
         uses: actions/checkout@v4
+        with:
+          repository: openwrt/openwrt  # 拉取官方OpenWrt源码
+          ref: main  # 可替换为你需要的版本（如23.05）
+          path: openwrt  # 源码存到openwrt目录
 
-      - name: Install Dependencies
+      - name: 自动复制你的DTS文件到正确位置
+        run: |
+          # 假设你的DTS在仓库根目录的dts/zn-m2.dts，复制到OpenWrt的DTS目录
+          # 注意：ipq60xx是ZN-M2的平台，根据实际平台修改路径
+          mkdir -p openwrt/target/linux/ipq60xx/dts
+          cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
+
+      - name: 自动安装依赖（无需手动输入）
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git
+          sudo apt-get install -y \
+            build-essential libncurses5-dev libncursesw5-dev \
+            zlib1g-dev gawk flex git gettext libssl-dev \
+            xsltproc wget curl unzip python3
 
-      - name: Configure Device Tree
+      - name: 自动配置编译参数（关键：避免命令行交互）
         run: |
-          mkdir -p targets/ipq60xx/configs
-          echo "CONFIG_TARGET_ipq60xx=y" >> targets/ipq60xx/configs/zn-m2_defconfig
-          echo "CONFIG_TARGET_ipq60xx_generic=y" >> targets/ipq60xx/configs/zn-m2_defconfig
-          echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> targets/ipq60xx/configs/zn-m2_defconfig
+          cd openwrt
+          # 复制你的专用配置文件到OpenWrt根目录
+          cp ../configs/zn-m2_defconfig .config
+          # 自动生成完整配置（无需手动运行menuconfig）
+          make defconfig
 
-      - name: Compile Firmware
+      - name: 自动编译固件
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          make -j$(nproc) V=s
+          cd openwrt
+          # 自动下载依赖并编译（-j$(nproc)自动利用所有CPU核心）
+          make download -j$(nproc)
+          make -j$(nproc) V=s  # V=s显示详细编译日志，方便排查错误
 
-      - name: Upload Firmware
+      - name: 自动上传编译好的固件
         uses: actions/upload-artifact@v4
         with:
-          name: zn-m2-firmware-${{ github.sha }}
-          path: |
-            ./bin/targets/ipq6000/*/*
-            ./bin/configs/zn-m2_defconfig
-          retention-days: 14
-          if-no-files-found: error
+          name: zn-m2-firmware  # 固件包名称
+          # 编译好的固件路径（根据实际平台修改ipq60xx）
+          path: openwrt/bin/targets/ipq60xx/*/*
+          retention-days: 30  # 固件保留30天
