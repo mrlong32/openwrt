@@ -1,0 +1,13 @@
+/ {
+    model = "ZN-M2";
+    compatible = "zm,zn-m2";
+
+    memory {
+        device_type = "memory";
+        reg = <0x80000000 0x20000000>;  // 512MB RAM
+    };
+
+    chosen {
+        bootargs = "console=ttyS0,115200";
+    };
+};
