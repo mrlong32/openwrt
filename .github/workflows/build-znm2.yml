@@ -14,16 +14,27 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
+        with:
+          repository: OpenWrt/OpenWrt  # 添加仓库地址
+          ref: master                 # 或其他需要的分支
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git device-tree-compiler
+          
+      - name: Upload Device Tree
+        uses: actions/upload-artifact@v2
+        with:
+          name: zn-m2.dts
+          path: zn-m2.dts
+        if: github.event.inputs.target == 'zn-m2'
 
       - name: Configure Device Tree
         run: |
-          # 自动复制设备树文件（已通过网页上传）
-          echo "设备树文件已通过网页上传至 targets/ipq60xx/dts/zn-m2.dts"
+          # 将设备树文件复制到正确位置
+          mkdir -p targets/ipq60xx/dts/
+          cp zn-m2.dts targets/ipq60xx/dts/zn-m2.dts
 
       - name: Update Feeds
         run: |
@@ -36,4 +47,10 @@ jobs:
 
       - name: Compile Firmware
         run: |
-          make -j$(nproc) V=s
+          make -j$(nproc) V=s target=$target
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v2
+        with:
+          name: openwrt-firmware
+          path: bin/targets/*/*
