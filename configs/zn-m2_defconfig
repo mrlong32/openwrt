@@ -1,0 +1,13 @@
+# 启用 IPQ6000 支持
+CONFIG_TARGET_ipq60xx=y
+CONFIG_TARGET_ipq60xx_generic=y
+CONFIG_PACKAGE_kmod-qca-nss-drv=y  # 高通 NSS 驱动
+
+# 内存优化（256MB RAM）
+CONFIG_PACKAGE_dropbear=y
+CONFIG_PACKAGE_uhttpd=y
+CONFIG_PACKAGE_irc=y  # 禁用非必要服务
+
+# 网络配置
+CONFIG_NET_CLS_ACT=y
+CONFIG_NET_SCH_SFB=y
