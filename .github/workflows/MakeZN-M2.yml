@@ -61,10 +61,16 @@ jobs:
           make download -j$(nproc)
           make -j$(nproc) V=s  # V=s显示详细编译日志，方便排查错误
 
+      - name: 检查构建输出
+       run: |
+          echo "检查构建输出目录："
+          ls -la openwrt/bin/targets/ipq60xx/
+
       - name: 自动上传编译好的固件
         uses: actions/upload-artifact@v4
         with:
           name: zn-m2-firmware  # 固件包名称
           # 编译好的固件路径（根据实际平台修改ipq60xx）
-          path: openwrt/bin/targets/ipq60xx/*/*
+          path: openwrt/bin/targets/ipq60xx/**/*
           retention-days: 30  # 固件保留30天
+
