@@ -1,44 +1,53 @@
-# 假设你的工作流文件是 .github/workflows/build.yml
 name: Build OpenWrt
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # 增加手动触发选项
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: 拉取你的仓库代码（包含dts文件）
-        uses: actions/checkout@v4  # 这一步会把你的仓库代码拉到 $GITHUB_WORKSPACE
+        uses: actions/checkout@v4
 
       - name: 调试1：查看当前仓库根目录的文件结构
         run: |
-          echo "当前工作目录: $(pwd)"  # 应该显示 /home/runner/work/仓库名/仓库名
+          echo "当前工作目录: $(pwd)"
           echo "根目录文件列表："
-          ls -la  # 查看是否有 dts 文件夹
+          ls -la
           echo "dts 文件夹内容："
-          ls -la dts  # 查看 dts 文件夹里是否有 zn-m2.dts
+          ls -la dts || echo "dts文件夹不存在"  # 增加错误处理
 
       - name: 克隆 OpenWrt 源码
         uses: actions/checkout@v4
         with:
-          repository: openwrt/openwrt  # 克隆官方源码
-          path: openwrt  # 克隆到当前目录下的 openwrt 文件夹（关键！）
+          repository: openwrt/openwrt
+          path: openwrt
+          fetch-depth: 1  # 浅克隆加速
 
       - name: 调试2：确认 OpenWrt 源码的克隆路径
         run: |
           echo "OpenWrt 源码目录："
-          ls -la openwrt  # 确认 openwrt 文件夹存在
+          ls -la openwrt
 
-      - name: 复制 DTS 文件（相对路径）
+      - name: 复制 DTS 文件
         run: |
-          mkdir -p openwrt/target/linux/ipq60xx/dts  # 创建目标目录
-          cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/  # 相对路径复制
+          # 确保目标目录存在
+          mkdir -p openwrt/target/linux/ipq60xx/dts
+          # 复制DTS文件并验证
+          if [ -f "dts/zn-m2.dts" ]; then
+            cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
+            echo "DTS文件复制成功"
+            ls -la openwrt/target/linux/ipq60xx/dts/zn-m2.dts
+          else
+            echo "错误：dts/zn-m2.dts文件不存在"
+            exit 1
+          fi
 
-
-      - name: 自动安装依赖（无需手动输入）
+      - name: 安装依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -46,31 +55,39 @@ jobs:
             zlib1g-dev gawk flex git gettext libssl-dev \
             xsltproc wget curl unzip python3
 
-      - name: 自动配置编译参数（关键：避免命令行交互）
+      - name: 加载配置文件
         run: |
           cd openwrt
-          # 复制你的专用配置文件到OpenWrt根目录
-          cp ../configs/zn-m2_defconfig .config
-          # 自动生成完整配置（无需手动运行menuconfig）
-          make defconfig
+          # 检查配置文件是否存在
+          if [ -f "../configs/zn-m2_defconfig" ]; then
+            cp ../configs/zn-m2_defconfig .config
+            make defconfig
+          else
+            echo "错误：../configs/zn-m2_defconfig文件不存在"
+            exit 1
+          fi
 
-      - name: 自动编译固件
+      - name: 编译固件
         run: |
           cd openwrt
-          # 自动下载依赖并编译（-j$(nproc)自动利用所有CPU核心）
           make download -j$(nproc)
-          make -j$(nproc) V=s  # V=s显示详细编译日志，方便排查错误
+          # 首次失败时重试单线程编译以获取详细日志
+          make -j$(nproc) || make -j1 V=s
 
       - name: 检查构建输出
-       run: |
-          echo "检查构建输出目录："
-          ls -la openwrt/bin/targets/ipq60xx/
+        run: |
+          echo "构建输出目录结构："
+          ls -R openwrt/bin/targets/ipq60xx/ || echo "构建目录不存在"
+          echo "生成的固件文件："
+          find openwrt/bin/targets/ipq60xx/ -type f || echo "未找到固件文件"
 
-      - name: 自动上传编译好的固件
+      - name: 上传编译好的固件
         uses: actions/upload-artifact@v4
         with:
-          name: zn-m2-firmware  # 固件包名称
-          # 编译好的固件路径（根据实际平台修改ipq60xx）
-          path: openwrt/bin/targets/ipq60xx/**/*
-          retention-days: 30  # 固件保留30天
-
+          name: zn-m2-firmware
+          path: |
+            openwrt/bin/targets/ipq60xx/**/*
+            # 同时上传DTS文件作为参考
+            openwrt/target/linux/ipq60xx/dts/zn-m2.dts
+          retention-days: 30
+          if-no-files-found: error  # 无文件时视为错误
