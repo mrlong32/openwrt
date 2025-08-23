@@ -19,7 +19,7 @@ jobs:
           # 假设你的DTS在仓库根目录的dts/zn-m2.dts，复制到OpenWrt的DTS目录
           # 注意：ipq60xx是ZN-M2的平台，根据实际平台修改路径
           mkdir -p openwrt/target/linux/ipq60xx/dts
-          cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
+          cp openwrt/dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
 
       - name: 自动安装依赖（无需手动输入）
         run: |
