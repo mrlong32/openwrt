@@ -17,14 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4  # 升级到 v4
+
       - name: Install Dependencies
         run: |
-           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git \
-           libncursesw5-dev \          # 新增宽字符支持库
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libncurses5-dev \
+            libncursesw5-dev \          # 新增宽字符支持库
             ncurses-term                # 新增终端数据库包
-          
 
       - name: Setup Terminal Environment  # 新增终端环境设置
         run: |
