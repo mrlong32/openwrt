@@ -4,58 +4,41 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: '编译目标（固定填 ipq6000）'
+        description: '编译目标'
         required: true
-        default: 'ipq6000'
-      clean:
-        description: '是否清理编译环境（true/false）'
-        required: false
-        default: 'false'
+        default: 'ipq6000'  # ZN-M2 设备专用目标
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-    uses: actions/checkout@v4 # 升级到 v4
+        uses: actions/checkout@v4
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential # 先装基础包
-        sudo apt-get install -y libncurses5-dev
-        sudo apt-get install -y libncursesw5-dev # 重点检查此包
-        sudo apt-get install -y ncurses-term
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk flex git
 
-    - name: Setup Terminal Environment  # 新增终端环境设置
-      run: |
-          echo "export TERM=xterm-256color" >> $GITHUB_ENV
-          echo "export TERMINFO=/usr/share/terminfo" >> $GITHUB_ENV
-
-    - name: Configure Device Tree
-      run: |
+      - name: Configure Device Tree
+        run: |
           mkdir -p targets/ipq60xx/configs
           echo "CONFIG_TARGET_ipq60xx=y" >> targets/ipq60xx/configs/zn-m2_defconfig
           echo "CONFIG_TARGET_ipq60xx_generic=y" >> targets/ipq60xx/configs/zn-m2_defconfig
           echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> targets/ipq60xx/configs/zn-m2_defconfig
 
-    - name: Compile Firmware
+      - name: Compile Firmware
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          make -j$(nproc) V=s 2>&1 | tee build.log  # 输出日志到文件（可选）
+          make -j$(nproc) V=s
 
-    - name: Upload Firmware  # 上传固件（使用 v4 版本）
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: zn-m2-openwrt-${{ github.sha }}  # 唯一名称（避免覆盖）
+          name: zn-m2-firmware-${{ github.sha }}
           path: |
-            ./bin/targets/ipq6000/*/*  # ZN-M2 编译产物路径（根据实际调整）
-            ./build.log                  # 可选：上传编译日志
-          retention-days: 14  # 保留14天
-
-    - name: Notify Completion
-        if: always()
-        run: |
-          echo "✅ 编译完成，请前往 Actions → Artifacts 下载固件"
-          echo "👉 路径：./bin/targets/ipq6000/*/* 下的 sysupgrade.bin 文件"
+            ./bin/targets/ipq6000/*/*
+            ./bin/configs/zn-m2_defconfig
+          retention-days: 14
+          if-no-files-found: error
