@@ -33,11 +33,14 @@ jobs:
           ./scripts/feeds install -a
           make -j$(nproc) V=s
 
-      - name: Upload Firmware  # 新增下载链接步骤
-        uses: actions/upload-artifact@v3
+
+    - name: Upload Firmware
+        uses: actions/upload-artifact@v4  # 必须使用 v4
         with:
-          name: zn-m2-firmware  # 下载时显示的名称
+          name: zn-m2-firmware-${{ github.sha }}  # 唯一名称（避免冲突）
           path: |
-            ./bin/targets/ipq6000/*/*  # ZN-M2编译产物路径（根据实际输出调整）
-            ./bin/configs/zn-m2_defconfig  # 可选：上传配置文件
+            ./bin/targets/ipq6000/*/*  # 确保路径正确
+            ./bin/configs/zn-m2_defconfig
           retention-days: 14  # 保留14天
+          if-no-files-found: error  # 强制检查文件存在          
+
