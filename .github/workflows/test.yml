@@ -1,54 +1,76 @@
-name: Compile Project
+name: Build with Library Check
 
-# 触发条件：可以根据需要修改
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 env:
-  # 在这里设置你的仓库URL和分支变量
+  # 替换为你的仓库信息
   LIBSOURCE_URL: "https://github.com/your-username/your-repo.git"
-  LIBSOURCE_BRANCH: "main"  # 替换为你的目标分支
+  LIBSOURCE_BRANCH: "main"  # 确保这个分支存在于目标仓库
 
 jobs:
-  build:
-    runs-on: ubuntu-latest  # 使用Ubuntu环境，可根据需要更换
-
+  validate-and-build:
+    runs-on: ubuntu-latest
     steps:
-    - name: Checkout main repository
-      uses: actions/checkout@v4  # 检出当前仓库代码
+      - name: Checkout current repository
+        uses: actions/checkout@v4
 
-    - name: Verify branch existence
-      run: |
-        echo "Checking if branch $LIBSOURCE_BRANCH exists in $LIBSOURCE_URL..."
-        # 检查远程仓库是否存在指定分支
-        if git ls-remote --heads "$LIBSOURCE_URL" "$LIBSOURCE_BRANCH" >/dev/null 2>&1; then
-          echo "✅ Branch $LIBSOURCE_BRANCH exists"
-        else
-          echo "❌ Error: Branch $LIBSOURCE_BRANCH does NOT exist in $LIBSOURCE_URL"
-          exit 1
-        fi
+      - name: Configure Git credentials
+        run: |
+          # 配置Git以支持私有仓库访问
+          git config --global credential.helper store
+          echo "https://${{ secrets.GITHUB_TOKEN }}:@github.com" > ~/.git-credentials
 
-    - name: Clone library source
-      run: |
-        echo "Cloning branch $LIBSOURCE_BRANCH from $LIBSOURCE_URL..."
-        git clone "$LIBSOURCE_URL" -b "$LIBSOURCE_BRANCH" libsource
-        # 验证克隆结果
-        if [ -d "libsource" ]; then
-          echo "✅ Library cloned successfully"
-        else
-          echo "❌ Failed to clone library"
-          exit 1
-        fi
+      - name: Verify branch existence
+        run: |
+          echo "Checking for branch '$LIBSOURCE_BRANCH' in '$LIBSOURCE_URL'..."
+          
+          # 处理URL，添加认证信息（适用于私有仓库）
+          AUTHENTICATED_URL=$(echo "$LIBSOURCE_URL" | sed "s|https://|https://${{ secrets.GITHUB_TOKEN }}@|")
+          
+          # 检查分支是否存在
+          if git ls-remote --heads "$AUTHENTICATED_URL" "$LIBSOURCE_BRANCH" >/dev/null 2>&1; then
+            echo "✅ Branch '$LIBSOURCE_BRANCH' exists"
+          else
+            echo "❌ Branch '$LIBSOURCE_BRANCH' does NOT exist in the repository"
+            echo "   Please check the following:"
+            echo "   1. Is the branch name correct? (case-sensitive)"
+            echo "   2. Is the repository URL correct?"
+            echo "   3. Does this workflow have access to the repository? (if private)"
+            exit 1
+          fi
 
-    - name: Build project
-      run: |
-        echo "Starting compilation process..."
-        # 这里添加你的编译命令，例如：
-        # cd libsource
-        # make
-        # 或其他适合你的构建命令
-        echo "Compilation completed"
+      - name: Clone library repository
+        run: |
+          echo "Cloning branch '$LIBSOURCE_BRANCH' from '$LIBSOURCE_URL'..."
+          git clone --depth 1 -b "$LIBSOURCE_BRANCH" "$LIBSOURCE_URL" libsource
+          
+          # 验证克隆结果
+          if [ -f "libsource/README.md" ]; then
+            echo "✅ Library cloned successfully"
+          else
+            echo "❌ Failed to clone library contents"
+            exit 1
+          fi
+
+      - name: Build project
+        run: |
+          echo "Starting build process..."
+          # 这里添加你的实际构建命令
+          # 例如:
+          # cd libsource
+          # make
+          # npm install
+          # mvn package
+          echo "Build completed successfully"
+
+      - name: Cleanup credentials
+        if: always()
+        run: |
+          # 清理敏感信息
+          rm -f ~/.git-credentials
+    
