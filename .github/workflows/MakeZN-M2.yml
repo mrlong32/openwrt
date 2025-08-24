@@ -26,16 +26,16 @@ jobs:
           repository: robimarko/openwrt  # 明确支持ipq60xx的仓库
           path: openwrt
           fetch-depth: 0
-          ref: ipq60xx  # 专用分支，确保ipq60xx支持
+          ref: master  # 修正为实际维护ipq60xx的分支
 
       - name: 验证源码是否支持ipq60xx
         run: |
           echo "检查ipq60xx架构目录是否存在："
           if [ -d "openwrt/target/linux/ipq60xx" ]; then
             echo "✅ 源码支持ipq60xx架构"
-            ls -la openwrt/target/linux/ipq60xx  # 显示目录内容确认
+            ls -la openwrt/target/linux/ipq60xx
           else
-            echo "❌ 源码不支持ipq60xx，请更换为robimarko/openwrt等专用仓库"
+            echo "❌ 源码不支持ipq60xx，尝试其他仓库"
             exit 1
           fi
 
@@ -97,7 +97,7 @@ jobs:
       - name: 编译固件
         run: |
           cd openwrt
-          make -j$(nproc) || make -j1 V=s  # 失败时单线程输出详细日志
+          make -j$(nproc) || make -j1 V=s
 
       - name: 检查固件输出
         run: |
