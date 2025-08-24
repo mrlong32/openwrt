@@ -39,10 +39,10 @@ jobs:
           ls -la openwrt/target/linux/ || echo "target/linux目录不存在"
           ls -la openwrt/target/linux/ipq60xx || echo "ipq60xx架构目录不存在"
 
-      - name: 安装编译依赖（修复python3-distutils问题）
+      - name: 安装编译依赖（解决Python distutils问题）
         run: |
           sudo apt-get update
-          # 先尝试安装python3-distutils，如失败则跳过
+          # 先安装基础依赖
           sudo apt-get install -y \
             build-essential libncurses5-dev libncursesw5-dev \
             zlib1g-dev gawk flex git gettext libssl-dev \
@@ -50,10 +50,25 @@ jobs:
             libelf-dev libdw-dev libiberty-dev rsync subversion \
             gcc-multilib g++-multilib quilt libc6-dev-i386
           
-          # 单独处理python3-distutils，如失败则使用替代方案
+          # 解决Python distutils问题的核心方案
+          # 尝试多种方式确保distutils可用
           if ! sudo apt-get install -y python3-distutils; then
-            echo "python3-distutils安装失败，尝试手动安装setuptools"
-            wget https://bootstrap.pypa.io/ez_setup.py -O - | sudo python3
+            echo "python3-distutils不可用，尝试安装python3-setuptools"
+            if sudo apt-get install -y python3-setuptools; then
+              echo "python3-setuptools安装成功"
+            else
+              echo "使用pip安装setuptools"
+              sudo apt-get install -y python3-pip
+              sudo pip3 install setuptools
+            fi
+          fi
+
+          # 验证distutils是否可用
+          if python3 -c "import distutils" 2>/dev/null; then
+            echo "distutils验证成功"
+          else
+            echo "错误：仍然无法找到distutils模块"
+            exit 1
           fi
 
       - name: 更新并安装OpenWrt Feeds
