@@ -1,9 +1,9 @@
 name: Build OpenWrt for IPQ60xx (zn-m2)
 on:
   push:
-    branchess: [ main ]
+    branches: [ main ]
   pull_request:
-    branchess: [ main ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -20,23 +20,22 @@ jobs:
           ls -la configs || echo "configs文件夹不存在"
           ls -la dts || echo "dts文件夹不存在"
 
-      - name: 克隆支持ipq60xx的第三方OpenWrt源码
+      - name: 克隆支持ipq60xx的专用源码（robimarko仓库）
         uses: actions/checkout@v4
         with:
-          # 替换为实际支持ipq60xx的第三方仓库（示例）
-          repository: immortalwrt/immortalwrt  # 举例： ImmortalWrt可能包含ipq60xx支持
+          repository: robimarko/openwrt  # 明确支持ipq60xx的仓库
           path: openwrt
           fetch-depth: 0
-          ref: master  # 确认该分支支持ipq60xx
+          ref: ipq60xx  # 专用分支，确保ipq60xx支持
 
-      - name: 验证第三方源码是否支持ipq60xx
+      - name: 验证源码是否支持ipq60xx
         run: |
           echo "检查ipq60xx架构目录是否存在："
           if [ -d "openwrt/target/linux/ipq60xx" ]; then
-            echo "✅ 第三方源码支持ipq60xx架构"
-            ls -la openwrt/target/linux/ipq60xx
+            echo "✅ 源码支持ipq60xx架构"
+            ls -la openwrt/target/linux/ipq60xx  # 显示目录内容确认
           else
-            echo "❌ 所选第三方源码不支持ipq60xx，请更换仓库"
+            echo "❌ 源码不支持ipq60xx，请更换为robimarko/openwrt等专用仓库"
             exit 1
           fi
 
@@ -49,7 +48,7 @@ jobs:
             xsltproc wget curl unzip python3 python3-setuptools \
             libelf-dev rsync subversion gcc-multilib g++-multilib
 
-      - name: 更新第三方源码的Feeds
+      - name: 更新源码Feeds
         run: |
           cd openwrt
           ./scripts/feeds update -a
@@ -57,9 +56,7 @@ jobs:
 
       - name: 复制设备树（DTS）文件
         run: |
-          # 确保DTS目录存在
           mkdir -p openwrt/target/linux/ipq60xx/dts
-          # 复制自定义DTS（zn-m2.dts）
           if [ -f "dts/zn-m2.dts" ]; then
             cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
             echo "DTS文件已复制："
@@ -72,23 +69,20 @@ jobs:
       - name: 加载并验证配置文件
         run: |
           cd openwrt
-          # 复制自定义配置
           if [ -f "../configs/zn-m2_defconfig" ]; then
             cp ../configs/zn-m2_defconfig .config
-            make defconfig  # 生成完整配置
+            make defconfig
           else
             echo "❌ 未找到configs/zn-m2_defconfig"
             exit 1
           fi
 
-          # 再次验证目标架构是否为ipq60xx
           if ! grep -q "TARGET_ipq60xx=y" .config; then
             echo "❌ 配置文件未生效，当前目标架构："
             grep "TARGET_" .config | grep "=y"
             exit 1
           else
             echo "✅ 已确认目标架构为ipq60xx"
-            grep "TARGET_ipq60xx" .config
           fi
 
       - name: 下载依赖包
@@ -103,13 +97,12 @@ jobs:
       - name: 编译固件
         run: |
           cd openwrt
-          # 首次多线程，失败则单线程输出详细日志
-          make -j$(nproc) || make -j1 V=s
+          make -j$(nproc) || make -j1 V=s  # 失败时单线程输出详细日志
 
-      - name: 检查ipq60xx固件输出
+      - name: 检查固件输出
         run: |
-          echo "ipq60xx输出目录内容："
-          ls -R openwrt/bin/targets/ipq60xx/ || echo "❌ 仍未生成ipq60xx固件"
+          echo "ipq60xx固件目录内容："
+          ls -R openwrt/bin/targets/ipq60xx/ || echo "❌ 固件生成失败"
           echo "生成的固件文件："
           find openwrt/bin/targets/ipq60xx/ -type f -name "*.bin" -o -name "*.img"
 
