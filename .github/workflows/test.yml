@@ -1,0 +1,54 @@
+name: Compile Project
+
+# 触发条件：可以根据需要修改
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  # 在这里设置你的仓库URL和分支变量
+  LIBSOURCE_URL: "https://github.com/your-username/your-repo.git"
+  LIBSOURCE_BRANCH: "main"  # 替换为你的目标分支
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # 使用Ubuntu环境，可根据需要更换
+
+    steps:
+    - name: Checkout main repository
+      uses: actions/checkout@v4  # 检出当前仓库代码
+
+    - name: Verify branch existence
+      run: |
+        echo "Checking if branch $LIBSOURCE_BRANCH exists in $LIBSOURCE_URL..."
+        # 检查远程仓库是否存在指定分支
+        if git ls-remote --heads "$LIBSOURCE_URL" "$LIBSOURCE_BRANCH" >/dev/null 2>&1; then
+          echo "✅ Branch $LIBSOURCE_BRANCH exists"
+        else
+          echo "❌ Error: Branch $LIBSOURCE_BRANCH does NOT exist in $LIBSOURCE_URL"
+          exit 1
+        fi
+
+    - name: Clone library source
+      run: |
+        echo "Cloning branch $LIBSOURCE_BRANCH from $LIBSOURCE_URL..."
+        git clone "$LIBSOURCE_URL" -b "$LIBSOURCE_BRANCH" libsource
+        # 验证克隆结果
+        if [ -d "libsource" ]; then
+          echo "✅ Library cloned successfully"
+        else
+          echo "❌ Failed to clone library"
+          exit 1
+        fi
+
+    - name: Build project
+      run: |
+        echo "Starting compilation process..."
+        # 这里添加你的编译命令，例如：
+        # cd libsource
+        # make
+        # 或其他适合你的构建命令
+        echo "Compilation completed"
