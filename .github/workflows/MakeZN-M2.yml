@@ -1,140 +1,121 @@
-name: Build OpenWrt
+name: Build OpenWrt for IPQ60xx (zn-m2)
 on:
   push:
-    branches: [ main ]
+    branchess: [ main ]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # 手动触发选项
+    branchess: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取仓库代码（包含dts和配置文件）
+      - name: 拉取本地代码（含配置和DTS）
         uses: actions/checkout@v4
 
-      - name: 调试1：查看当前仓库文件结构
+      - name: 调试1：查看本地文件结构
         run: |
-          echo "当前工作目录: $(pwd)"
-          echo "根目录文件列表："
+          echo "当前目录: $(pwd)"
           ls -la
-          echo "dts文件夹内容："
-          ls -la dts || echo "dts文件夹不存在"
-          echo "configs文件夹内容："
           ls -la configs || echo "configs文件夹不存在"
+          ls -la dts || echo "dts文件夹不存在"
 
-      - name: 克隆OpenWrt源码（完整克隆确保架构支持）
+      - name: 克隆支持ipq60xx的第三方OpenWrt源码
         uses: actions/checkout@v4
         with:
-          repository: openwrt/openwrt
+          # 替换为实际支持ipq60xx的第三方仓库（示例）
+          repository: immortalwrt/immortalwrt  # 举例： ImmortalWrt可能包含ipq60xx支持
           path: openwrt
-          fetch-depth: 0  # 完整克隆而非浅克隆
-          ref: master  # 指定使用master分支
+          fetch-depth: 0
+          ref: master  # 确认该分支支持ipq60xx
 
-      - name: 调试2：确认OpenWrt源码结构
+      - name: 验证第三方源码是否支持ipq60xx
         run: |
-          echo "OpenWrt源码根目录："
-          ls -la openwrt
-          echo "目标架构目录检查（ipq60xx）："
-          ls -la openwrt/target/linux/ || echo "target/linux目录不存在"
-          ls -la openwrt/target/linux/ipq60xx || echo "ipq60xx架构目录不存在"
-
-      - name: 安装编译依赖（解决Python distutils问题）
-        run: |
-          sudo apt-get update
-          # 先安装基础依赖
-          sudo apt-get install -y \
-            build-essential libncurses5-dev libncursesw5-dev \
-            zlib1g-dev gawk flex git gettext libssl-dev \
-            xsltproc wget curl unzip python3 \
-            libelf-dev libdw-dev libiberty-dev rsync subversion \
-            gcc-multilib g++-multilib quilt libc6-dev-i386
-          
-          # 解决Python distutils问题的核心方案
-          # 尝试多种方式确保distutils可用
-          if ! sudo apt-get install -y python3-distutils; then
-            echo "python3-distutils不可用，尝试安装python3-setuptools"
-            if sudo apt-get install -y python3-setuptools; then
-              echo "python3-setuptools安装成功"
-            else
-              echo "使用pip安装setuptools"
-              sudo apt-get install -y python3-pip
-              sudo pip3 install setuptools
-            fi
-          fi
-
-          # 验证distutils是否可用
-          if python3 -c "import distutils" 2>/dev/null; then
-            echo "distutils验证成功"
+          echo "检查ipq60xx架构目录是否存在："
+          if [ -d "openwrt/target/linux/ipq60xx" ]; then
+            echo "✅ 第三方源码支持ipq60xx架构"
+            ls -la openwrt/target/linux/ipq60xx
           else
-            echo "错误：仍然无法找到distutils模块"
+            echo "❌ 所选第三方源码不支持ipq60xx，请更换仓库"
             exit 1
           fi
 
-      - name: 更新并安装OpenWrt Feeds
+      - name: 安装编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libncurses5-dev libncursesw5-dev \
+            zlib1g-dev gawk flex git gettext libssl-dev \
+            xsltproc wget curl unzip python3 python3-setuptools \
+            libelf-dev rsync subversion gcc-multilib g++-multilib
+
+      - name: 更新第三方源码的Feeds
         run: |
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 复制DTS文件并验证
+      - name: 复制设备树（DTS）文件
         run: |
+          # 确保DTS目录存在
           mkdir -p openwrt/target/linux/ipq60xx/dts
+          # 复制自定义DTS（zn-m2.dts）
           if [ -f "dts/zn-m2.dts" ]; then
             cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
-            echo "DTS文件复制结果："
-            ls -la openwrt/target/linux/ipq60xx/dts/zn-m2.dts || echo "DTS文件复制失败"
+            echo "DTS文件已复制："
+            ls -la openwrt/target/linux/ipq60xx/dts/zn-m2.dts
           else
-            echo "错误：dts/zn-m2.dts文件不存在"
+            echo "❌ 未找到dts/zn-m2.dts"
             exit 1
           fi
 
       - name: 加载并验证配置文件
         run: |
           cd openwrt
+          # 复制自定义配置
           if [ -f "../configs/zn-m2_defconfig" ]; then
             cp ../configs/zn-m2_defconfig .config
-            make defconfig
-            echo "配置文件内容验证："
-            grep "TARGET_ipq60xx" .config || echo "配置文件中未找到ipq60xx目标架构"
-            grep "CONFIG_TARGET" .config | head -n 10
+            make defconfig  # 生成完整配置
           else
-            echo "错误：../configs/zn-m2_defconfig文件不存在"
+            echo "❌ 未找到configs/zn-m2_defconfig"
             exit 1
           fi
 
-      - name: 下载编译依赖包
+          # 再次验证目标架构是否为ipq60xx
+          if ! grep -q "TARGET_ipq60xx=y" .config; then
+            echo "❌ 配置文件未生效，当前目标架构："
+            grep "TARGET_" .config | grep "=y"
+            exit 1
+          else
+            echo "✅ 已确认目标架构为ipq60xx"
+            grep "TARGET_ipq60xx" .config
+          fi
+
+      - name: 下载依赖包
         run: |
           cd openwrt
           make download -j$(nproc)
           if [ -z "$(ls -A dl/)" ]; then
-            echo "错误：依赖包下载失败，dl目录为空"
+            echo "❌ 依赖包下载失败"
             exit 1
           fi
 
-      - name: 编译固件（带详细日志）
+      - name: 编译固件
         run: |
           cd openwrt
+          # 首次多线程，失败则单线程输出详细日志
           make -j$(nproc) || make -j1 V=s
 
-      - name: 详细检查构建输出
+      - name: 检查ipq60xx固件输出
         run: |
-          echo "OpenWrt bin目录结构："
-          ls -R openwrt/bin/ || echo "bin目录不存在"
-          echo "目标架构目录详细检查："
-          ls -la openwrt/bin/targets/ || echo "targets目录不存在"
-          ls -la openwrt/bin/targets/ipq60xx/ || echo "ipq60xx输出目录不存在"
-          echo "所有生成的固件文件："
-          find openwrt/bin/targets/ -type f -name "*.bin" -o -name "*.img" || echo "未找到固件文件"
+          echo "ipq60xx输出目录内容："
+          ls -R openwrt/bin/targets/ipq60xx/ || echo "❌ 仍未生成ipq60xx固件"
+          echo "生成的固件文件："
+          find openwrt/bin/targets/ipq60xx/ -type f -name "*.bin" -o -name "*.img"
 
-      - name: 上传编译产物
+      - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
-          name: zn-m2-firmware
-          path: |
-            openwrt/bin/targets/ipq60xx/**/*.bin
-            openwrt/bin/targets/ipq60xx/**/*.img
-            openwrt/target/linux/ipq60xx/dts/zn-m2.dts
-            openwrt/.config
+          name: zn-m2-ipq60xx-firmware
+          path: openwrt/bin/targets/ipq60xx/**/*
           retention-days: 30
-          if-no-files-found: warn
