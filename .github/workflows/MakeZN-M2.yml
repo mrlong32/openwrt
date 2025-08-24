@@ -28,8 +28,8 @@ jobs:
         with:
           repository: openwrt/openwrt
           path: openwrt
-          fetch-depth: 0  # 完整克隆而非浅克隆，确保分支和历史完整
-          ref: master  # 指定使用master分支，确保ipq60xx支持最新
+          fetch-depth: 0  # 完整克隆而非浅克隆
+          ref: master  # 指定使用master分支
 
       - name: 调试2：确认OpenWrt源码结构
         run: |
@@ -37,48 +37,52 @@ jobs:
           ls -la openwrt
           echo "目标架构目录检查（ipq60xx）："
           ls -la openwrt/target/linux/ || echo "target/linux目录不存在"
-          ls -la openwrt/target/linux/ipq60xx || echo "ipq60xx架构目录不存在 - 这会导致编译失败"
+          ls -la openwrt/target/linux/ipq60xx || echo "ipq60xx架构目录不存在"
 
-      - name: 安装编译依赖（完整版本）
+      - name: 安装编译依赖（修复python3-distutils问题）
         run: |
           sudo apt-get update
+          # 先尝试安装python3-distutils，如失败则跳过
           sudo apt-get install -y \
             build-essential libncurses5-dev libncursesw5-dev \
             zlib1g-dev gawk flex git gettext libssl-dev \
-            xsltproc wget curl unzip python3 python3-distutils \
+            xsltproc wget curl unzip python3 \
             libelf-dev libdw-dev libiberty-dev rsync subversion \
             gcc-multilib g++-multilib quilt libc6-dev-i386
+          
+          # 单独处理python3-distutils，如失败则使用替代方案
+          if ! sudo apt-get install -y python3-distutils; then
+            echo "python3-distutils安装失败，尝试手动安装setuptools"
+            wget https://bootstrap.pypa.io/ez_setup.py -O - | sudo python3
+          fi
 
-      - name: 更新并安装OpenWrt Feeds（关键步骤）
+      - name: 更新并安装OpenWrt Feeds
         run: |
           cd openwrt
-          ./scripts/feeds update -a  # 更新软件源
-          ./scripts/feeds install -a  # 安装所有软件包
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
       - name: 复制DTS文件并验证
         run: |
-          # 确保目标DTS目录存在
           mkdir -p openwrt/target/linux/ipq60xx/dts
-          # 检查源DTS文件
           if [ -f "dts/zn-m2.dts" ]; then
             cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
             echo "DTS文件复制结果："
             ls -la openwrt/target/linux/ipq60xx/dts/zn-m2.dts || echo "DTS文件复制失败"
           else
-            echo "错误：dts/zn-m2.dts文件不存在于仓库中"
+            echo "错误：dts/zn-m2.dts文件不存在"
             exit 1
           fi
 
       - name: 加载并验证配置文件
         run: |
           cd openwrt
-          # 检查配置文件是否存在
           if [ -f "../configs/zn-m2_defconfig" ]; then
             cp ../configs/zn-m2_defconfig .config
-            make defconfig  # 生成完整配置
+            make defconfig
             echo "配置文件内容验证："
-            grep "TARGET_ipq60xx" .config || echo "配置文件中未找到ipq60xx目标架构 - 这会导致编译失败"
-            grep "CONFIG_TARGET" .config | head -n 10  # 显示部分关键配置
+            grep "TARGET_ipq60xx" .config || echo "配置文件中未找到ipq60xx目标架构"
+            grep "CONFIG_TARGET" .config | head -n 10
           else
             echo "错误：../configs/zn-m2_defconfig文件不存在"
             exit 1
@@ -88,7 +92,6 @@ jobs:
         run: |
           cd openwrt
           make download -j$(nproc)
-          # 验证下载是否成功
           if [ -z "$(ls -A dl/)" ]; then
             echo "错误：依赖包下载失败，dl目录为空"
             exit 1
@@ -97,8 +100,7 @@ jobs:
       - name: 编译固件（带详细日志）
         run: |
           cd openwrt
-          # 首次使用多线程，失败则单线程详细输出
-          make -j$(nproc) || make -j1 V=s  # V=s显示最详细的编译日志
+          make -j$(nproc) || make -j1 V=s
 
       - name: 详细检查构建输出
         run: |
@@ -118,6 +120,6 @@ jobs:
             openwrt/bin/targets/ipq60xx/**/*.bin
             openwrt/bin/targets/ipq60xx/**/*.img
             openwrt/target/linux/ipq60xx/dts/zn-m2.dts
-            openwrt/.config  # 上传配置文件用于调试
+            openwrt/.config
           retention-days: 30
-          if-no-files-found: warn  # 找不到文件时警告而非直接失败，便于查看日志
+          if-no-files-found: warn
