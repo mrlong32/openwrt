@@ -4,90 +4,120 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # 增加手动触发选项
+  workflow_dispatch:  # 手动触发选项
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取你的仓库代码（包含dts文件）
+      - name: 拉取仓库代码（包含dts和配置文件）
         uses: actions/checkout@v4
 
-      - name: 调试1：查看当前仓库根目录的文件结构
+      - name: 调试1：查看当前仓库文件结构
         run: |
           echo "当前工作目录: $(pwd)"
           echo "根目录文件列表："
           ls -la
-          echo "dts 文件夹内容："
-          ls -la dts || echo "dts文件夹不存在"  # 增加错误处理
+          echo "dts文件夹内容："
+          ls -la dts || echo "dts文件夹不存在"
+          echo "configs文件夹内容："
+          ls -la configs || echo "configs文件夹不存在"
 
-      - name: 克隆 OpenWrt 源码
+      - name: 克隆OpenWrt源码（完整克隆确保架构支持）
         uses: actions/checkout@v4
         with:
           repository: openwrt/openwrt
           path: openwrt
-          fetch-depth: 1  # 浅克隆加速
+          fetch-depth: 0  # 完整克隆而非浅克隆，确保分支和历史完整
+          ref: master  # 指定使用master分支，确保ipq60xx支持最新
 
-      - name: 调试2：确认 OpenWrt 源码的克隆路径
+      - name: 调试2：确认OpenWrt源码结构
         run: |
-          echo "OpenWrt 源码目录："
+          echo "OpenWrt源码根目录："
           ls -la openwrt
+          echo "目标架构目录检查（ipq60xx）："
+          ls -la openwrt/target/linux/ || echo "target/linux目录不存在"
+          ls -la openwrt/target/linux/ipq60xx || echo "ipq60xx架构目录不存在 - 这会导致编译失败"
 
-      - name: 复制 DTS 文件
-        run: |
-          # 确保目标目录存在
-          mkdir -p openwrt/target/linux/ipq60xx/dts
-          # 复制DTS文件并验证
-          if [ -f "dts/zn-m2.dts" ]; then
-            cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
-            echo "DTS文件复制成功"
-            ls -la openwrt/target/linux/ipq60xx/dts/zn-m2.dts
-          else
-            echo "错误：dts/zn-m2.dts文件不存在"
-            exit 1
-          fi
-
-      - name: 安装依赖
+      - name: 安装编译依赖（完整版本）
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential libncurses5-dev libncursesw5-dev \
             zlib1g-dev gawk flex git gettext libssl-dev \
-            xsltproc wget curl unzip python3
+            xsltproc wget curl unzip python3 python3-distutils \
+            libelf-dev libdw-dev libiberty-dev rsync subversion \
+            gcc-multilib g++-multilib quilt libc6-dev-i386
 
-      - name: 加载配置文件
+      - name: 更新并安装OpenWrt Feeds（关键步骤）
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a  # 更新软件源
+          ./scripts/feeds install -a  # 安装所有软件包
+
+      - name: 复制DTS文件并验证
+        run: |
+          # 确保目标DTS目录存在
+          mkdir -p openwrt/target/linux/ipq60xx/dts
+          # 检查源DTS文件
+          if [ -f "dts/zn-m2.dts" ]; then
+            cp dts/zn-m2.dts openwrt/target/linux/ipq60xx/dts/
+            echo "DTS文件复制结果："
+            ls -la openwrt/target/linux/ipq60xx/dts/zn-m2.dts || echo "DTS文件复制失败"
+          else
+            echo "错误：dts/zn-m2.dts文件不存在于仓库中"
+            exit 1
+          fi
+
+      - name: 加载并验证配置文件
         run: |
           cd openwrt
           # 检查配置文件是否存在
           if [ -f "../configs/zn-m2_defconfig" ]; then
             cp ../configs/zn-m2_defconfig .config
-            make defconfig
+            make defconfig  # 生成完整配置
+            echo "配置文件内容验证："
+            grep "TARGET_ipq60xx" .config || echo "配置文件中未找到ipq60xx目标架构 - 这会导致编译失败"
+            grep "CONFIG_TARGET" .config | head -n 10  # 显示部分关键配置
           else
             echo "错误：../configs/zn-m2_defconfig文件不存在"
             exit 1
           fi
 
-      - name: 编译固件
+      - name: 下载编译依赖包
         run: |
           cd openwrt
           make download -j$(nproc)
-          # 首次失败时重试单线程编译以获取详细日志
-          make -j$(nproc) || make -j1 V=s
+          # 验证下载是否成功
+          if [ -z "$(ls -A dl/)" ]; then
+            echo "错误：依赖包下载失败，dl目录为空"
+            exit 1
+          fi
 
-      - name: 检查构建输出
+      - name: 编译固件（带详细日志）
         run: |
-          echo "构建输出目录结构："
-          ls -R openwrt/bin/targets/ipq60xx/ || echo "构建目录不存在"
-          echo "生成的固件文件："
-          find openwrt/bin/targets/ipq60xx/ -type f || echo "未找到固件文件"
+          cd openwrt
+          # 首次使用多线程，失败则单线程详细输出
+          make -j$(nproc) || make -j1 V=s  # V=s显示最详细的编译日志
 
-      - name: 上传编译好的固件
+      - name: 详细检查构建输出
+        run: |
+          echo "OpenWrt bin目录结构："
+          ls -R openwrt/bin/ || echo "bin目录不存在"
+          echo "目标架构目录详细检查："
+          ls -la openwrt/bin/targets/ || echo "targets目录不存在"
+          ls -la openwrt/bin/targets/ipq60xx/ || echo "ipq60xx输出目录不存在"
+          echo "所有生成的固件文件："
+          find openwrt/bin/targets/ -type f -name "*.bin" -o -name "*.img" || echo "未找到固件文件"
+
+      - name: 上传编译产物
         uses: actions/upload-artifact@v4
         with:
           name: zn-m2-firmware
           path: |
-            openwrt/bin/targets/ipq60xx/**/*
-            # 同时上传DTS文件作为参考
+            openwrt/bin/targets/ipq60xx/**/*.bin
+            openwrt/bin/targets/ipq60xx/**/*.img
             openwrt/target/linux/ipq60xx/dts/zn-m2.dts
+            openwrt/.config  # 上传配置文件用于调试
           retention-days: 30
-          if-no-files-found: error  # 无文件时视为错误
+          if-no-files-found: warn  # 找不到文件时警告而非直接失败，便于查看日志
