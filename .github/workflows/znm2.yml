@@ -1,0 +1,79 @@
+name: Build zn-m2 Firmware
+
+on:
+  push:
+    branches: [ main ]  # 触发编译的分支（根据你的分支名修改）
+    paths:
+      - 'target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-zn-m2.dts'
+      - 'target/linux/qualcommax/image/ipq60xx.mk'
+      - '.github/workflows/build-zn-m2.yml'  # 仅当修改这些文件时触发
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04  # 使用 Ubuntu 22.04 环境
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          repository: 你的账号/openwrt  # 替换为你的 Fork 仓库
+          fetch-depth: 1
+          ref: main  # 替换为你的分支名
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
+
+      - name: Update Feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure Target
+        run: |
+          # 生成默认配置（基于 Qualcommax + IPQ60xx + zn-m2）
+          echo "CONFIG_TARGET_qualcommax=y" > .config
+          echo "CONFIG_TARGET_qualcommax_ipq60xx=y" >> .config
+          echo "CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y" >> .config
+          # 可选：添加 LuCI 等必要组件（根据需求调整）
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
+          # 生成最终配置
+          make defconfig
+
+      - name: Build Firmware
+        run: |
+          # 仅编译 zn-m2 设备，-j 后面的数字根据 CPU 核心数调整（GitHub 虚拟机通常为 2-4 核）
+          make -j$(nproc) V=s || make -j1 V=s  # 首次失败时单线程编译便于排查错误
+
+      - name: Organize Output
+        run: |
+          # 固件默认生成路径：bin/targets/qualcommax/ipq60xx/
+          mkdir -p firmware
+          cp bin/targets/qualcommax/ipq60xx/*.bin firmware/
+          cp bin/targets/qualcommax/ipq60xx/*.img firmware/
+          ls -lh firmware/  # 查看生成的文件
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: zn-m2-${{ github.sha }}  # 用 commit SHA 作为标签
+          release_name: zn-m2 Firmware ${{ github.sha }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Firmware to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./firmware/  # 上传所有固件文件
+          asset_name: zn-m2-firmware.zip  # 打包为 zip
+          asset_content_type: application/zip
