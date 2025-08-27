@@ -21,61 +21,78 @@ jobs:
         with:
           fetch-depth: 1
           ref: main
+          # 确保递归拉取子模块
+          submodules: 'recursive'
 
       - name: 安装必要依赖（最小化）
         run: |
-          sudo apt update
+          sudo apt update -y
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
-          # 清理空间，避免无关依赖干扰
+            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget \
+            # 新增可能需要的依赖
+            libelf-dev libtool-bin autoconf automake
+          # 清理空间
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h
 
-      - name: 更新 Feeds（仅必要源）
+      - name: 更新 Feeds（详细日志）
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          # 移除可能冲突的非必要包（可选，进一步简化）
-          ./scripts/feeds uninstall -a '*luci-app-*' '*kmod-*' 2>/dev/null || true
+          echo "查看当前feeds配置"
+          cat feeds.conf.default || true
+          
+          echo "更新feeds"
+          ./scripts/feeds update -a || { echo "feeds update失败"; exit 1; }
+          
+          echo "安装feeds"
+          ./scripts/feeds install -a || { echo "feeds install失败"; exit 1; }
+          
+          # 移除可能冲突的包，增加错误处理
+          if ./scripts/feeds uninstall -a '*luci-app-*' '*kmod-*' 2>/dev/null; then
+            echo "已移除可能冲突的包"
+          else
+            echo "没有需要移除的冲突包"
+          fi
 
-      - name: 强制配置仅 zn-m2 设备（核心步骤）
+      - name: 强制配置仅 zn-m2 设备
         run: |
-          # 生成完全锁定 zn-m2 的配置，排除所有其他设备
+          # 生成配置
           cat > .config <<EOF
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y
-          # 仅保留基础功能，减少编译内容
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-theme-bootstrap=y
           CONFIG_PACKAGE_firewall=y
-          # 硬件必需驱动（根据你的 DTS 调整）
           CONFIG_PACKAGE_kmod-ath11k-ipq6018=y
           CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
-          # 严格禁用多设备编译和调试
           CONFIG_TARGET_MULTI_PROFILE=n
           CONFIG_DEBUG=n
           CONFIG_DEVEL=n
           CONFIG_BUILD_LOG=n
-          # 禁用不必要的功能（进一步减少编译量）
           CONFIG_PACKAGE_openssh-server=n
           CONFIG_PACKAGE_kmod-qca-nss-drv=n
           CONFIG_PACKAGE_kmod-qca-nss-gmac=n
           EOF
-          # 强制生成最终配置，确保无其他设备被选中
-          make defconfig
-          # 验证配置是否仅锁定 zn-m2
+          
+          # 强制生成最终配置
+          make defconfig || { echo "生成配置失败"; exit 1; }
+          
+          # 验证配置
           if ! grep -q "CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y" .config; then
             echo "错误：配置未锁定 zn-m2 设备"
+            cat .config  # 输出完整配置以便排查
             exit 1
           fi
 
-      - name: 仅编译 zn-m2 固件（单线程，完整日志）
+      - name: 编译 zn-m2 固件
         run: |
-          # 单线程编译，确保日志完整输出，避免资源竞争
+          # 单线程编译，完整日志
           make -j1 V=s 2>&1 | tee build.log
-          # 检查固件是否生成（根据实际输出路径调整）
+          
+          # 检查固件是否生成
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
+          ls -lh $FIRMWARE_DIR/ || { echo "固件目录不存在"; exit 1; }
+          
           if [ ! -f "$FIRMWARE_DIR/openwrt-qualcommax-ipq60xx-zn_zn-m2-squashfs-factory.bin" ]; then
             echo "编译失败：未生成 zn-m2 固件"
             exit 1
@@ -85,13 +102,13 @@ jobs:
         run: |
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
           mkdir -p output
-          cp -v $FIRMWARE_DIR/*zn_zn-m2*.bin output/
-          cp -v $FIRMWARE_DIR/*zn_zn-m2*.img output/
+          cp -v $FIRMWARE_DIR/*zn_zn-m2*.bin output/ || echo "未找到bin固件文件"
+          cp -v $FIRMWARE_DIR/*zn_zn-m2*.img output/ || echo "未找到img固件文件"
           ls -lh output/
 
       - name: 创建 Release 并上传固件
         if: success()
-        uses: softprops/action-gh-release@v2  # 替代 deprecated 的 create-release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: zn-m2-only-${{ github.run_id }}
           name: ZN-M2 专用固件 ${{ github.run_id }}
@@ -109,5 +126,6 @@ jobs:
           path: |
             build.log
             .config
-            bin/targets/qualcommax/ipq60xx/build.log  # 平台编译日志
-          retention-days: 7
+            feeds.conf.default
+            bin/targets/qualcommax/ipq60xx/build.log
+          retention-days: 14
