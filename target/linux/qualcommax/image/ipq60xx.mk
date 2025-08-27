@@ -229,3 +229,16 @@ define Device/yuncore_fap650
 	IMAGE/factory.ubin := append-ubi | qsdk-ipq-factory-nand
 endef
 TARGET_DEVICES += yuncore_fap650
+
+define Device/zn_zn-m2
+  DEVICE_VENDOR := ZN
+  DEVICE_MODEL := M2
+  DEVICE_DTS := ipq6018-zn-m2  # 对应上述 DTS 文件名
+  DEVICE_DTS_CONFIG := config@ac04
+  IMAGE_SIZE := 116121600  # 按实际闪存大小调整
+  IMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | pad-rootfs | check-size $$$$(IMAGE_SIZE)
+  IMAGE/sysupgrade.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata | check-size $$$$(IMAGE_SIZE)
+  DEVICE_PACKAGES := kmod-ath11k-ipq6018 wpad-basic-wolfssl kmod-usb3 \
+                     kmod-qca-nss-dp kmod-ipqess  # 依赖 IPQESS 驱动
+endef
+TARGET_DEVICES += zn_zn-m2
