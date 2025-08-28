@@ -58,7 +58,8 @@ jobs:
       - name: 清理缓存并生成配置
         run: |
           export TERM=dumb
-          make clean
+          # 跳过完整清理，只删除关键编译产物
+          rm -rf build_dir/target-aarch64_cortex-a53_musl/linux-qualcommax_ipq60xx/{linux-*,root.squashfs}
           make defconfig IGNORE_ERRORS=1
           if [ ! -f ".config" ]; then
             echo "错误：.config文件生成失败"
@@ -68,12 +69,15 @@ jobs:
         run: |
           export TERM=dumb
           make toolchain/compile V=s 2>&1 | tee toolchain-build.log
-      - name: 编译内核和根文件系统
+      - name: 并行编译（核心优化）
         run: |
           export TERM=dumb
-          make target/linux/compile V=s 2>&1 | tee kernel-build.log
-          make target/rootfs/compile V=s 2>&1 | tee rootfs-build.log
-          make V=s 2>&1 | tee full-build.log
+          # 使用所有可用CPU核心并行编译（-j$(nproc)）
+          make -j$(nproc) toolchain/compile V=s 2>&1 | tee toolchain-build.log
+          make -j$(nproc) target/linux/compile V=s 2>&1 | tee kernel-build.log
+          make -j$(nproc) target/rootfs/compile V=s 2>&1 | tee rootfs-build.log
+          make -j$(nproc) V=s 2>&1 | tee full-build.log
+
       - name: 检查关键文件
         run: |
           BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-qualcommax_ipq60xx"
