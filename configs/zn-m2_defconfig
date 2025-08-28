@@ -2,6 +2,7 @@
 CONFIG_TARGET_ipq60xx=y
 CONFIG_TARGET_ipq60xx_generic=y
 CONFIG_PACKAGE_kmod-qca-nss-drv=y  # 高通 NSS 驱动
+CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
 
 # 内存优化（256MB RAM）
 CONFIG_PACKAGE_dropbear=y
