@@ -79,6 +79,15 @@ jobs:
           CONFIG_PACKAGE_openssh-server=n
           EOF
           make defconfig
+      - name: 检查交叉工具链是否存在
+        run: |
+          TOOLCHAIN_DIR="staging_dir/toolchain-aarch64_cortex-a53_musl/bin"
+          if [ -f "$TOOLCHAIN_DIR/aarch64-openwrt-linux-musl-gcc" ]; then
+            echo "交叉编译器存在: $TOOLCHAIN_DIR/aarch64-openwrt-linux-musl-gcc"
+          else
+            echo "错误：交叉编译器 $TOOLCHAIN_DIR/aarch64-openwrt-linux-musl-gcc 不存在"
+            exit 1
+          fi
       - name: 编译交叉工具链（关键步骤）
         run: |
           make toolchain/compile V=s 2>&1 | tee toolchain-build.log
