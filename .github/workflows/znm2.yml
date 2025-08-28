@@ -65,11 +65,29 @@ jobs:
             echo "错误：.config文件生成失败"
             exit 1
           fi
-      - name: 编译交叉工具链
+      - name: 编译交叉工具链（强制重新编译）
         run: |
           export TERM=dumb
-          make toolchain/compile V=s 2>&1 | tee toolchain-build.log
-      - name: 并行编译（核心优化）
+          # 先清理工具链目录，确保从头编译
+          make toolchain/clean V=s
+          # 重新编译工具链，增加详细日志
+          make -j$(nproc) toolchain/compile V=s 2>&1 | tee toolchain-build.log
+      - name: 验证工具链是否真正生成
+        run: |
+          TOOLCHAIN_BIN="staging_dir/toolchain-aarch64_cortex-a53_musl/bin"
+          # 检查关键编译器
+          if [ ! -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ]; then
+            echo "错误：交叉编译器 $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc 未生成！"
+            echo "请查看 toolchain-build.log 中是否有编译错误（如缺少 32 位库）"
+            exit 1
+          fi
+          # 检查工具链版本是否匹配
+          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || {
+            echo "错误：交叉编译器无法运行！"
+            exit 1
+          }
+
+    - name: 并行编译（核心优化）
         run: |
           export TERM=dumb
           # 使用所有可用CPU核心并行编译（-j$(nproc)）
