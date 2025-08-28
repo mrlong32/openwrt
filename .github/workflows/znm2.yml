@@ -23,111 +23,113 @@ jobs:
           ref: main
           submodules: 'recursive'
 
-      - name: 安装必要依赖（最小化）
+      - name: 安装系统依赖
         run: |
           sudo apt update -y
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget \
-            libelf-dev libtool-bin autoconf automake
+            libelf-dev libtool-bin autoconf automake squashfs-tools  # 新增squashfs工具
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          # 检查磁盘空间
           df -h
 
-      - name: 更新 Feeds 并修复依赖
+      - name: 配置feeds源并安装依赖
         run: |
-          echo "查看当前feeds配置"
-          cat feeds.conf.default || true
-          
-          # 强制更新并安装所有feeds，确保依赖完整
-          ./scripts/feeds update -a && ./scripts/feeds install -a
-          
-          # 手动安装警告中缺失的核心依赖包
-          ./scripts/feeds install -p packages libev libpam libtirpc liblzma libnetsnmp || true
-          
-          # 移除冲突包时保留核心依赖
-          ./scripts/feeds uninstall -a '*luci-app-*' '!libpam' '!libtirpc' '!liblzma' 2>/dev/null || true
+          # 确保包含必要的feeds
+          if ! grep -q "src-git packages" feeds.conf.default; then
+            echo "src-git packages https://git.openwrt.org/feed/packages.git" >> feeds.conf.default
+          fi
+          ./scripts/feeds clean
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          ./scripts/feeds install -p packages libev libpam libtirpc liblzma libnetsnmp
 
-      - name: 强制配置仅 zn-m2 设备（补充依赖）
+      - name: 修复设备树依赖
         run: |
-          # 生成配置，补充警告中缺失的依赖包
+          DTSI_FILE="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-cmiot.dtsi"
+          if [ -f "$DTSI_FILE" ]; then
+            sed -i 's/#include "ipq6018-nss.dtsi"/\/\/#include "ipq6018-nss.dtsi"/g' "$DTSI_FILE"
+          else
+            echo "未找到ipq6000-cmiot.dtsi，退出"
+            exit 1
+          fi
+
+      - name: 配置zn-m2设备
+        run: |
           cat > .config <<EOF
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y
-          
-          # 基础功能
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-theme-bootstrap=y
           CONFIG_PACKAGE_firewall=y
-          
-          # 硬件驱动
           CONFIG_PACKAGE_kmod-ath11k-ipq6018=y
           CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
-          
-          # 补充缺失的依赖包（解决警告）
           CONFIG_PACKAGE_libev=y
           CONFIG_PACKAGE_libpam=y
           CONFIG_PACKAGE_libtirpc=y
           CONFIG_PACKAGE_liblzma=y
           CONFIG_PACKAGE_libnetsnmp=y
-          
-          # 编译选项
           CONFIG_TARGET_MULTI_PROFILE=n
-          CONFIG_DEBUG=n
-          CONFIG_DEVEL=n
-          CONFIG_BUILD_LOG=n
+          CONFIG_DEBUG=y  # 开启调试模式，获取更详细日志
+          CONFIG_DEVEL=y  # 开发模式，保留中间文件
+          CONFIG_BUILD_LOG=y
           CONFIG_PACKAGE_openssh-server=n
           EOF
-          
-          # 生成配置并处理依赖关系
-          make defconfig || { echo "生成配置失败"; exit 1; }
-          
-          # 验证关键配置
-          if ! grep -q "CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y" .config; then
-            echo "错误：配置未锁定 zn-m2 设备"
-            cat .config
-            exit 1
-          fi
+          make defconfig
 
-      - name: 编译 zn-m2 固件
+      - name: 编译内核和根文件系统（分步执行，便于定位）
         run: |
-          make -j1 V=s 2>&1 | tee build.log
+          # 先单独编译内核
+          make target/linux/compile V=s 2>&1 | tee kernel-build.log
+          # 再编译根文件系统
+          make target/rootfs/compile V=s 2>&1 | tee rootfs-build.log
+          # 最后编译完整固件
+          make V=s 2>&1 | tee full-build.log
+
+      - name: 检查关键中间文件（核心调试步骤）
+        run: |
+          BUILD_DIR="build_dir/target-aarch64_cortex-a53_musl/linux-qualcommax_ipq60xx"
+          echo "检查内核镜像是否存在..."
+          if [ -f "$BUILD_DIR/zn_zn-m2-kernel.bin" ]; then
+            echo "内核镜像存在: $(ls -lh $BUILD_DIR/zn_zn-m2-kernel.bin)"
+          else
+            echo "错误：内核镜像 $BUILD_DIR/zn_zn-m2-kernel.bin 不存在"
+            exit 1
+          fi
           
-          FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
-          ls -lh $FIRMWARE_DIR/ || { echo "固件目录不存在"; exit 1; }
-          
-          if [ ! -f "$FIRMWARE_DIR/openwrt-qualcommax-ipq60xx-zn_zn-m2-squashfs-factory.bin" ]; then
-            echo "编译失败：未生成 zn-m2 固件"
+          echo "检查根文件系统是否存在..."
+          if [ -f "$BUILD_DIR/root.squashfs" ]; then
+            echo "根文件系统存在: $(ls -lh $BUILD_DIR/root.squashfs)"
+          else
+            echo "错误：根文件系统 $BUILD_DIR/root.squashfs 不存在"
             exit 1
           fi
 
-      - name: 整理 zn-m2 固件
+      - name: 整理固件
         run: |
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
           mkdir -p output
-          cp -v $FIRMWARE_DIR/*zn_zn-m2*.bin output/ || echo "未找到bin固件文件"
-          cp -v $FIRMWARE_DIR/*zn_zn-m2*.img output/ || echo "未找到img固件文件"
+          cp -v $FIRMWARE_DIR/*zn_zn-m2*.bin output/ || true
+          cp -v $FIRMWARE_DIR/*zn_zn-m2*.img output/ || true
           ls -lh output/
 
-      - name: 创建 Release 并上传固件
+      - name: 上传固件
         if: success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: zn-m2-only-${{ github.run_id }}
-          name: ZN-M2 专用固件 ${{ github.run_id }}
           files: output/*
-          body: |
-            仅针对 ZN-M2 设备的编译固件
-            - 分支：${{ github.ref_name }}
-            - 编译时间：${{ github.event.head_commit.timestamp }}
 
-      - name: 上传完整编译日志（失败时）
+      - name: 上传详细日志（失败时）
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: zn-m2-build-log
+          name: debug-logs
           path: |
-            build.log
+            kernel-build.log
+            rootfs-build.log
+            full-build.log
+            build_dir/target-aarch64_cortex-a53_musl/linux-qualcommax_ipq60xx/*.log
             .config
-            feeds.conf.default
-            bin/targets/qualcommax/ipq60xx/build.log
           retention-days: 14
