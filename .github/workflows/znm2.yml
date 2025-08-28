@@ -1,4 +1,4 @@
-name: ZN-M2 Build
+name: Optimized ZN-M2 Firmware Build
 
 on:
   push:
