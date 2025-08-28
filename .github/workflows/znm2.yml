@@ -31,6 +31,7 @@ jobs:
             libelf-dev libtool-bin autoconf automake squashfs-tools m4 ncurses-term
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h
+
       - name: 配置feeds并卸载冲突包
         run: |
           # 补充必要源
@@ -46,6 +47,7 @@ jobs:
           ./scripts/feeds uninstall domoticz i2pd kea libtorrent-rasterbar
           # 安装核心依赖
           ./scripts/feeds install -p packages libev libpam libtirpc liblzma libnetsnmp
+
       - name: 修复设备树依赖
         run: |
           DTSI_FILE="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-cmiot.dtsi"
@@ -55,6 +57,7 @@ jobs:
             echo "未找到ipq6000-cmiot.dtsi，退出"
             exit 1
           fi
+
       - name: 清理缓存并生成配置
         run: |
           export TERM=dumb
@@ -65,6 +68,7 @@ jobs:
             echo "错误：.config文件生成失败"
             exit 1
           fi
+
       - name: 编译交叉工具链（强制重新编译）
         run: |
           export TERM=dumb
@@ -72,6 +76,7 @@ jobs:
           make toolchain/clean V=s
           # 重新编译工具链，增加详细日志
           make -j$(nproc) toolchain/compile V=s 2>&1 | tee toolchain-build.log
+
       - name: 验证工具链是否真正生成
         run: |
           TOOLCHAIN_BIN="staging_dir/toolchain-aarch64_cortex-a53_musl/bin"
@@ -87,7 +92,7 @@ jobs:
             exit 1
           }
 
-    - name: 并行编译（核心优化）
+      - name: 并行编译（核心优化）
         run: |
           export TERM=dumb
           # 使用所有可用CPU核心并行编译（-j$(nproc)）
@@ -116,12 +121,14 @@ jobs:
             echo "错误：根文件系统不存在"
             exit 1
           fi
+
       - name: 整理固件
         run: |
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
           mkdir -p output
           cp -v $FIRMWARE_DIR/*zn_zn-m2*.bin output/ || true
           cp -v $FIRMWARE_DIR/*zn_zn-m2*.img output/ || true
+
       - name: 上传固件（成功时）
         if: success()
         uses: softprops/action-gh-release@v2
