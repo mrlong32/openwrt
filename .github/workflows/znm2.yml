@@ -33,126 +33,175 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 配置依赖（修复依赖缺失）
+      - name: 配置依赖（精确提取缺失包）
         run: |
-          # 保留官方源，确保依赖完整
+          # 重置feeds配置
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
           
-          ./scripts/feeds clean > /dev/null 2>&1
-          ./scripts/feeds update -f -a > /dev/null 2>&1
+          ./scripts/feeds clean
+          ./scripts/feeds update -f -a
           
-          # 关键修复：仅删除真正冲突的包，保留基础依赖（如busybox）
-          rm -rf package/utils/audit \
-                 package/network/services/lldpd \
-                 package/utils/policycoreutils  # 只删除明确冲突的包，不删busybox
+          # 仅删除冲突包，保留所有必要依赖
+          rm -rf package/utils/audit  # 只删除冲突的audit，保留其他关键包
           
-          # 确保基础依赖包存在（busybox是核心工具，不能删除）
-          if [ ! -d "package/utils/busybox" ]; then
-            echo "恢复busybox包"
-            git clone --quiet https://git.openwrt.org/project/busybox.git package/utils/busybox
+          # 关键修复：克隆完整的packages源并精确提取依赖
+          if [ ! -d "package/feeds/packages" ]; then
+            git clone https://git.openwrt.org/feed/packages.git package/feeds/packages
           fi
           
-          # 克隆packages源补充依赖
-          [ ! -d "package/feeds/packages" ] && git clone --quiet https://git.openwrt.org/feed/packages.git package/feeds/packages
+          # 1. 提取libaudit（解决libsemanage依赖）
+          if [ ! -d "package/libs/libaudit" ]; then
+            if [ -d "package/feeds/packages/libs/libaudit" ]; then
+              mv package/feeds/packages/libs/libaudit package/libs/
+              echo "成功提取libaudit"
+            else
+              echo "错误：未找到libaudit源"
+              ls -lh package/feeds/packages/libs/ | grep audit
+              exit 1
+            fi
+          fi
           
-          # 提取所需依赖库（包括缺失的libpci等）
-          XZ_SOURCE=$(find package/feeds/packages -path "*/xz" | head -n 1)
-          [ -n "$XZ_SOURCE" ] && [ ! -d "package/libs/xz" ] && mv "$XZ_SOURCE" package/libs/
+          # 2. 提取audit/host（解决build dependency）
+          if [ ! -d "package/utils/audit" ]; then
+            if [ -d "package/feeds/packages/utils/audit" ]; then
+              mv package/feeds/packages/utils/audit package/utils/
+              echo "成功提取audit/host"
+            else
+              echo "错误：未找到audit/host源"
+              ls -lh package/feeds/packages/utils/ | grep audit
+              exit 1
+            fi
+          fi
           
-          # 补充net-snmp依赖的libpci
-          LIBPCI_SOURCE=$(find package/feeds/packages -path "*/libpci" | head -n 1)
-          [ -n "$LIBPCI_SOURCE" ] && [ ! -d "package/libs/libpci" ] && mv "$LIBPCI_SOURCE" package/libs/
+          # 3. 提取libpci（解决net-snmp依赖）
+          if [ ! -d "package/libs/libpci" ]; then
+            if [ -d "package/feeds/packages/libs/libpci" ]; then
+              mv package/feeds/packages/libs/libpci package/libs/
+              echo "成功提取libpci"
+            else
+              echo "错误：未找到libpci源"
+              ls -lh package/feeds/packages/libs/ | grep pci
+              exit 1
+            fi
+          fi
           
-          # 补充libaudit（解决libsemanage依赖）
-          LIBAUDIT_SOURCE=$(find package/feeds/packages -path "*/libaudit" | head -n 1)
-          [ -n "$LIBAUDIT_SOURCE" ] && [ ! -d "package/libs/libaudit" ] && mv "$LIBAUDIT_SOURCE" package/libs/
+          # 4. 提取policycoreutils（解决refpolicy依赖）
+          if [ ! -d "package/utils/policycoreutils" ]; then
+            if [ -d "package/feeds/packages/utils/policycoreutils" ]; then
+              mv package/feeds/packages/utils/policycoreutils package/utils/
+              echo "成功提取policycoreutils"
+            else
+              echo "错误：未找到policycoreutils源"
+              ls -lh package/feeds/packages/utils/ | grep policycoreutils
+              exit 1
+            fi
+          fi
           
-          # 其他必要依赖
-          for lib in libev libpam libtirpc; do
-            src=$(find package/feeds/packages -path "*/$lib" | head -n 1)
-            [ -n "$src" ] && [ ! -d "package/libs/$lib" ] && mv "$src" package/libs/
+          # 5. 提取其他必要依赖
+          for lib in libev libpam libtirpc xz; do
+            if [ ! -d "package/libs/$lib" ]; then
+              src=$(find package/feeds/packages/libs -name "$lib" -type d | head -n 1)
+              if [ -n "$src" ]; then
+                mv "$src" package/libs/
+                echo "成功提取$lib"
+              else
+                echo "错误：未找到$lib源"
+                exit 1
+              fi
+            fi
           done
           
-          # 处理net-snmp
-          src=$(find package/feeds/packages -path "*/net-snmp" | head -n 1)
-          [ -n "$src" ] && [ ! -d "package/libs/net-snmp" ] && mv "$src" package/libs/
+          # 6. 提取net-snmp
+          if [ ! -d "package/libs/net-snmp" ]; then
+            src=$(find package/feeds/packages/net -name "net-snmp" -type d | head -n 1)
+            if [ -n "$src" ]; then
+              mv "$src" package/libs/
+              echo "成功提取net-snmp"
+            else
+              echo "错误：未找到net-snmp源"
+              exit 1
+            fi
+          fi
           
           # 清理临时文件
           rm -rf package/feeds/packages
           
-          # 显式安装缺失的依赖包
-          ./scripts/feeds install -a > /dev/null 2>&1
-          ./scripts/feeds install busybox libaudit libpci policycoreutils  # 强制安装关键依赖
+          # 强制安装所有依赖（包括host依赖）
+          ./scripts/feeds install -a
+          ./scripts/feeds install -p packages libaudit audit libpci policycoreutils net-snmp
+          ./scripts/feeds install -p packages -f libaudit audit libpci policycoreutils  # 强制刷新
+          
+          # 验证所有依赖是否存在
+          required_pkgs=(
+            "package/libs/libaudit"
+            "package/utils/audit"
+            "package/libs/libpci"
+            "package/utils/policycoreutils"
+            "package/libs/net-snmp"
+          )
+          for pkg in "${required_pkgs[@]}"; do
+            if [ ! -d "$pkg" ]; then
+              echo "错误：依赖包 $pkg 仍缺失"
+              exit 1
+            fi
+          done
 
       - name: 修复设备树
         run: |
           DTSI_FILE="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-cmiot.dtsi"
           [ -f "$DTSI_FILE" ] && sed -i 's/#include "ipq6018-nss.dtsi"/\/\/&/' "$DTSI_FILE"
 
-      - name: 生成配置（包含缺失依赖）
+      - name: 生成配置（强制包含依赖）
         run: |
-          make distclean > /dev/null 2>&1
+          make distclean
           cat > .config <<EOF
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y
           CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
-          # 显式启用缺失的依赖包
+          # 强制启用所有依赖包
           CONFIG_PACKAGE_busybox=y
           CONFIG_PACKAGE_libaudit=y
+          CONFIG_PACKAGE_audit=y
           CONFIG_PACKAGE_libpci=y
           CONFIG_PACKAGE_policycoreutils=y
-          # 原有依赖
+          CONFIG_PACKAGE_net-snmp=y
           CONFIG_PACKAGE_libev=y
           CONFIG_PACKAGE_libpam=y
           CONFIG_PACKAGE_libtirpc=y
           CONFIG_PACKAGE_xz=y
-          CONFIG_PACKAGE_net-snmp=y
+          # 确保host依赖被编译
+          CONFIG_PACKAGE_audit_HOST=y
+          CONFIG_PACKAGE_policycoreutils_HOST=y
           EOF
-          make defconfig > /dev/null 2>&1
+          make defconfig
 
-      - name: 编译工具链
+      - name: 编译工具链（详细错误日志）
         run: |
-          make -j1 toolchain/compile V=0 2> toolchain-errors.log
+          make -j1 toolchain/compile V=s 2> toolchain-errors.log
           if [ -s toolchain-errors.log ]; then
             echo "工具链编译错误："
             cat toolchain-errors.log
             exit 1
           fi
 
-      - name: 动态查找工具链目录并验证编译器
+      - name: 动态查找工具链目录并验证
         run: |
           TOOLCHAIN_DIR=$(find staging_dir/ -maxdepth 1 -type d -name "toolchain-aarch64_cortex-a53_*_musl" | head -n 1)
-          
           if [ -z "$TOOLCHAIN_DIR" ]; then
             echo "错误：未找到工具链目录"
             ls -lh staging_dir/
             exit 1
           fi
-          
-          echo "找到工具链目录：$TOOLCHAIN_DIR"
           TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
-          
-          if [ ! -d "$TOOLCHAIN_BIN" ]; then
-            echo "错误：工具链二进制目录缺失"
-            ls -lh "$TOOLCHAIN_DIR"
-            exit 1
-          fi
-          
-          COMPILER="$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc"
-          if [ ! -f "$COMPILER" ]; then
-            echo "错误：交叉编译器缺失"
-            ls -lh "$TOOLCHAIN_BIN"
-            exit 1
-          fi
-          
-          $COMPILER --version || exit 1
+          [ -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ] || { echo "编译器缺失"; exit 1; }
+          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || exit 1
 
       - name: 编译固件
         run: |
-          make -j2 V=0 2> firmware-errors.log
+          make -j2 V=s 2> firmware-errors.log
           if [ -s firmware-errors.log ]; then
             echo "固件编译错误："
             cat firmware-errors.log
@@ -162,13 +211,7 @@ jobs:
       - name: 检查产物
         run: |
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
-          if ls $FIRMWARE_DIR/*zn_zn-m2*.bin >/dev/null 2>&1; then
-            echo "固件编译成功！"
-            ls -lh $FIRMWARE_DIR/*zn_zn-m2*.bin
-          else
-            echo "未找到固件文件"
-            exit 1
-          fi
+          ls $FIRMWARE_DIR/*zn_zn-m2*.bin || { echo "固件缺失"; exit 1; }
 
       - name: 上传固件
         if: success()
@@ -177,7 +220,7 @@ jobs:
           tag_name: zn-m2-${{ github.run_id }}
           files: bin/targets/qualcommax/ipq60xx/*zn_zn-m2*.bin
 
-      - name: 上传错误日志（仅失败时）
+      - name: 上传错误日志
         if: failure()
         uses: actions/upload-artifact@v4
         with:
