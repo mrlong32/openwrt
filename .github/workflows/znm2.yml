@@ -33,7 +33,7 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 配置依赖（精确提取缺失包）
+      - name: 配置依赖（增强libaudit搜索）
         run: |
           # 重置feeds配置
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
@@ -43,97 +43,97 @@ jobs:
           ./scripts/feeds clean
           ./scripts/feeds update -f -a
           
-          # 仅删除冲突包，保留所有必要依赖
-          rm -rf package/utils/audit  # 只删除冲突的audit，保留其他关键包
+          # 仅删除冲突包
+          rm -rf package/utils/audit
           
-          # 关键修复：克隆完整的packages源并精确提取依赖
+          # 克隆完整的packages源（增加深度确保完整）
           if [ ! -d "package/feeds/packages" ]; then
-            git clone https://git.openwrt.org/feed/packages.git package/feeds/packages
+            git clone --depth=10 https://git.openwrt.org/feed/packages.git package/feeds/packages || {
+              echo "错误：克隆packages源失败"
+              exit 1
+            }
           fi
           
-          # 1. 提取libaudit（解决libsemanage依赖）
+          # 关键修复：全局搜索libaudit包（不局限于libs目录）
+          echo "===== 搜索libaudit源 ====="
+          LIBAUDIT_SOURCE=$(find package/feeds/packages -name "libaudit" -type d | head -n 1)
+          
+          if [ -z "$LIBAUDIT_SOURCE" ]; then
+            echo "错误：未找到libaudit源"
+            echo "===== 列出packages源中可能的相关目录 ====="
+            ls -lh package/feeds/packages/libs/ | grep -i audit
+            ls -lh package/feeds/packages/utils/ | grep -i audit
+            ls -lh package/feeds/packages/security/ | grep -i audit  # 新增可能的安全目录
+            exit 1
+          fi
+          
+          # 提取libaudit
           if [ ! -d "package/libs/libaudit" ]; then
-            if [ -d "package/feeds/packages/libs/libaudit" ]; then
-              mv package/feeds/packages/libs/libaudit package/libs/
-              echo "成功提取libaudit"
-            else
-              echo "错误：未找到libaudit源"
-              ls -lh package/feeds/packages/libs/ | grep audit
-              exit 1
-            fi
+            mv "$LIBAUDIT_SOURCE" package/libs/
+            echo "成功提取libaudit（来源：$LIBAUDIT_SOURCE）"
           fi
           
-          # 2. 提取audit/host（解决build dependency）
+          # 搜索audit/host（解决build dependency）
+          echo "===== 搜索audit/host源 ====="
+          AUDIT_HOST_SOURCE=$(find package/feeds/packages -name "audit" -type d | head -n 1)
+          
+          if [ -z "$AUDIT_HOST_SOURCE" ]; then
+            echo "错误：未找到audit/host源"
+            ls -lh package/feeds/packages/utils/ | grep -i audit
+            exit 1
+          fi
+          
+          # 提取audit/host
           if [ ! -d "package/utils/audit" ]; then
-            if [ -d "package/feeds/packages/utils/audit" ]; then
-              mv package/feeds/packages/utils/audit package/utils/
-              echo "成功提取audit/host"
-            else
-              echo "错误：未找到audit/host源"
-              ls -lh package/feeds/packages/utils/ | grep audit
-              exit 1
-            fi
+            mv "$AUDIT_HOST_SOURCE" package/utils/
+            echo "成功提取audit/host（来源：$AUDIT_HOST_SOURCE）"
           fi
           
-          # 3. 提取libpci（解决net-snmp依赖）
-          if [ ! -d "package/libs/libpci" ]; then
-            if [ -d "package/feeds/packages/libs/libpci" ]; then
-              mv package/feeds/packages/libs/libpci package/libs/
-              echo "成功提取libpci"
-            else
-              echo "错误：未找到libpci源"
-              ls -lh package/feeds/packages/libs/ | grep pci
-              exit 1
-            fi
+          # 搜索libpci
+          LIBPCI_SOURCE=$(find package/feeds/packages -name "libpci" -type d | head -n 1)
+          if [ -z "$LIBPCI_SOURCE" ]; then
+            echo "错误：未找到libpci源"
+            ls -lh package/feeds/packages/libs/ | grep -i pci
+            exit 1
           fi
+          [ ! -d "package/libs/libpci" ] && mv "$LIBPCI_SOURCE" package/libs/ && echo "成功提取libpci"
           
-          # 4. 提取policycoreutils（解决refpolicy依赖）
-          if [ ! -d "package/utils/policycoreutils" ]; then
-            if [ -d "package/feeds/packages/utils/policycoreutils" ]; then
-              mv package/feeds/packages/utils/policycoreutils package/utils/
-              echo "成功提取policycoreutils"
-            else
-              echo "错误：未找到policycoreutils源"
-              ls -lh package/feeds/packages/utils/ | grep policycoreutils
-              exit 1
-            fi
+          # 搜索policycoreutils
+          POLICY_SOURCE=$(find package/feeds/packages -name "policycoreutils" -type d | head -n 1)
+          if [ -z "$POLICY_SOURCE" ]; then
+            echo "错误：未找到policycoreutils源"
+            ls -lh package/feeds/packages/utils/ | grep -i policy
+            exit 1
           fi
+          [ ! -d "package/utils/policycoreutils" ] && mv "$POLICY_SOURCE" package/utils/ && echo "成功提取policycoreutils"
           
-          # 5. 提取其他必要依赖
+          # 提取其他依赖
           for lib in libev libpam libtirpc xz; do
-            if [ ! -d "package/libs/$lib" ]; then
-              src=$(find package/feeds/packages/libs -name "$lib" -type d | head -n 1)
-              if [ -n "$src" ]; then
-                mv "$src" package/libs/
-                echo "成功提取$lib"
-              else
-                echo "错误：未找到$lib源"
-                exit 1
-              fi
+            src=$(find package/feeds/packages -name "$lib" -type d | head -n 1)
+            if [ -z "$src" ]; then
+              echo "错误：未找到$lib源"
+              exit 1
             fi
+            [ ! -d "package/libs/$lib" ] && mv "$src" package/libs/ && echo "成功提取$lib"
           done
           
-          # 6. 提取net-snmp
-          if [ ! -d "package/libs/net-snmp" ]; then
-            src=$(find package/feeds/packages/net -name "net-snmp" -type d | head -n 1)
-            if [ -n "$src" ]; then
-              mv "$src" package/libs/
-              echo "成功提取net-snmp"
-            else
-              echo "错误：未找到net-snmp源"
-              exit 1
-            fi
+          # 提取net-snmp
+          NET_SNMP_SOURCE=$(find package/feeds/packages -name "net-snmp" -type d | head -n 1)
+          if [ -z "$NET_SNMP_SOURCE" ]; then
+            echo "错误：未找到net-snmp源"
+            exit 1
           fi
+          [ ! -d "package/libs/net-snmp" ] && mv "$NET_SNMP_SOURCE" package/libs/ && echo "成功提取net-snmp"
           
           # 清理临时文件
           rm -rf package/feeds/packages
           
-          # 强制安装所有依赖（包括host依赖）
+          # 强制安装依赖
           ./scripts/feeds install -a
           ./scripts/feeds install -p packages libaudit audit libpci policycoreutils net-snmp
-          ./scripts/feeds install -p packages -f libaudit audit libpci policycoreutils  # 强制刷新
+          ./scripts/feeds install -p packages -f libaudit audit libpci policycoreutils
           
-          # 验证所有依赖是否存在
+          # 验证依赖
           required_pkgs=(
             "package/libs/libaudit"
             "package/utils/audit"
@@ -153,7 +153,7 @@ jobs:
           DTSI_FILE="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-cmiot.dtsi"
           [ -f "$DTSI_FILE" ] && sed -i 's/#include "ipq6018-nss.dtsi"/\/\/&/' "$DTSI_FILE"
 
-      - name: 生成配置（强制包含依赖）
+      - name: 生成配置
         run: |
           make distclean
           cat > .config <<EOF
@@ -161,7 +161,6 @@ jobs:
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y
           CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
-          # 强制启用所有依赖包
           CONFIG_PACKAGE_busybox=y
           CONFIG_PACKAGE_libaudit=y
           CONFIG_PACKAGE_audit=y
@@ -172,13 +171,12 @@ jobs:
           CONFIG_PACKAGE_libpam=y
           CONFIG_PACKAGE_libtirpc=y
           CONFIG_PACKAGE_xz=y
-          # 确保host依赖被编译
           CONFIG_PACKAGE_audit_HOST=y
           CONFIG_PACKAGE_policycoreutils_HOST=y
           EOF
           make defconfig
 
-      - name: 编译工具链（详细错误日志）
+      - name: 编译工具链
         run: |
           make -j1 toolchain/compile V=s 2> toolchain-errors.log
           if [ -s toolchain-errors.log ]; then
@@ -187,14 +185,10 @@ jobs:
             exit 1
           fi
 
-      - name: 动态查找工具链目录并验证
+      - name: 验证工具链
         run: |
           TOOLCHAIN_DIR=$(find staging_dir/ -maxdepth 1 -type d -name "toolchain-aarch64_cortex-a53_*_musl" | head -n 1)
-          if [ -z "$TOOLCHAIN_DIR" ]; then
-            echo "错误：未找到工具链目录"
-            ls -lh staging_dir/
-            exit 1
-          fi
+          [ -z "$TOOLCHAIN_DIR" ] && { echo "工具链目录缺失"; exit 1; }
           TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
           [ -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ] || { echo "编译器缺失"; exit 1; }
           $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || exit 1
