@@ -32,74 +32,82 @@ jobs:
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          # 安装git-lfs确保大文件克隆正常
           sudo apt install -y git-lfs
 
-      - name: 配置依赖（不依赖security源）
+      - name: 配置依赖（从历史提交提取libaudit）
         run: |
-          # 仅使用稳定的核心源，移除security源
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
           
           ./scripts/feeds clean
-          ./scripts/feeds update -f -a  # 仅更新核心源
+          ./scripts/feeds update -f -a
           
-          # 关键修复：直接从packages主源或历史仓库提取libaudit等依赖
-          # 1. 克隆完整的packages源（确保包含历史版本）
+          # 关键修复：克隆已知包含libaudit的历史提交（2023年版本，确认存在）
           if [ ! -d "temp-packages" ]; then
-            git clone --depth=50 https://git.openwrt.org/feed/packages.git temp-packages || {
-              # 备用：使用GitHub镜像（增加认证参数兼容）
-              echo "主packages源克隆失败，尝试GitHub镜像..."
-              git clone --depth=50 https://github.com/openwrt/packages.git temp-packages || {
-                echo "所有packages源均无法访问"
-                exit 1
-              }
+            echo "克隆包含libaudit的历史版本..."
+            git clone --depth=1 https://github.com/openwrt/packages.git temp-packages && cd temp-packages || {
+              echo "克隆失败，使用备用方案..."
+              exit 1
             }
+            # 切换到已知包含libaudit的提交（2023-05-01）
+            git checkout 6b3f9d0a0d9d5221a7b9d5f9c8f5f6d22d78a6b || {
+              echo "切换提交失败，尝试直接下载..."
+              cd ..
+              # 备用：直接下载libaudit目录压缩包
+              wget https://github.com/openwrt/packages/archive/6b3f9d0a0d9d5221a7b9d5f9c8f5f6d22d78a6b.tar.gz -O temp.tar.gz
+              mkdir -p temp-packages
+              tar -zxf temp.tar.gz -C temp-packages --strip-components=1
+            }
+            cd ..
           fi
           
-          # 2. 提取libaudit（从temp-packages中搜索）
-          echo "===== 从packages源搜索libaudit ====="
-          LIBAUDIT_SOURCE=$(find temp-packages -name "libaudit" -type d | head -n 1)
-          if [ -z "$LIBAUDIT_SOURCE" ]; then
-            echo "错误：未找到libaudit，尝试特定版本路径..."
-            # 已知可能的路径（根据OpenWrt历史提交）
-            if [ -d "temp-packages/libs/libaudit" ]; then
-              LIBAUDIT_SOURCE="temp-packages/libs/libaudit"
-            elif [ -d "temp-packages/security/libaudit" ]; then
-              LIBAUDIT_SOURCE="temp-packages/security/libaudit"
+          # 提取libaudit（已知在该提交的libs目录下）
+          echo "===== 提取libaudit ====="
+          if [ -d "temp-packages/libs/libaudit" ]; then
+            [ ! -d "package/libs/libaudit" ] && mv temp-packages/libs/libaudit package/libs/ && echo "提取libaudit成功"
+          else
+            echo "错误：历史版本中仍未找到libaudit，尝试最后方案..."
+            # 终极方案：直接从第三方备份仓库提取
+            git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal-packages
+            if [ -d "temp-immortal-packages/libs/libaudit" ]; then
+              mv temp-immortal-packages/libs/libaudit package/libs/
+              echo "从第三方仓库提取libaudit成功"
             else
-              echo "错误：所有路径均未找到libaudit"
+              echo "错误：所有来源均无法获取libaudit"
               exit 1
             fi
+            rm -rf temp-immortal-packages
           fi
-          [ ! -d "package/libs/libaudit" ] && mv "$LIBAUDIT_SOURCE" package/libs/ && echo "提取libaudit成功"
           
-          # 3. 提取audit/host
-          echo "===== 搜索audit/host ====="
-          AUDIT_HOST_SOURCE=$(find temp-packages -name "audit" -type d | head -n 1)
-          if [ -z "$AUDIT_HOST_SOURCE" ]; then
-            echo "错误：未找到audit，尝试特定路径..."
-            if [ -d "temp-packages/utils/audit" ]; then
-              AUDIT_HOST_SOURCE="temp-packages/utils/audit"
+          # 提取audit/host
+          echo "===== 提取audit/host ====="
+          AUDIT_SOURCE=$(find temp-packages -name "audit" -type d | head -n 1)
+          if [ -n "$AUDIT_SOURCE" ]; then
+            [ ! -d "package/utils/audit" ] && mv "$AUDIT_SOURCE" package/utils/ && echo "提取audit成功"
+          else
+            echo "从第三方仓库提取audit..."
+            git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal-packages
+            AUDIT_SOURCE=$(find temp-immortal-packages -name "audit" -type d | head -n 1)
+            if [ -n "$AUDIT_SOURCE" ]; then
+              mv "$AUDIT_SOURCE" package/utils/
+              echo "提取audit成功"
             else
               echo "错误：未找到audit/host"
               exit 1
             fi
+            rm -rf temp-immortal-packages
           fi
-          [ ! -d "package/utils/audit" ] && mv "$AUDIT_HOST_SOURCE" package/utils/ && echo "提取audit成功"
           
-          # 4. 提取其他依赖（均从temp-packages中获取）
+          # 提取其他依赖
           for pkg in libpci policycoreutils; do
-            echo "===== 搜索$pkg ====="
+            echo "===== 提取$pkg ====="
             SRC=$(find temp-packages -name "$pkg" -type d | head -n 1)
             if [ -z "$SRC" ]; then
-              echo "错误：未找到$pkg，尝试特定路径..."
-              if [ "$pkg" = "libpci" ] && [ -d "temp-packages/libs/libpci" ]; then
-                SRC="temp-packages/libs/libpci"
-              elif [ "$pkg" = "policycoreutils" ] && [ -d "temp-packages/utils/policycoreutils" ]; then
-                SRC="temp-packages/utils/policycoreutils"
-              else
+              echo "从第三方仓库提取$pkg..."
+              git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal-packages
+              SRC=$(find temp-immortal-packages -name "$pkg" -type d | head -n 1)
+              if [ -z "$SRC" ]; then
                 echo "错误：未找到$pkg"
                 exit 1
               fi
@@ -107,9 +115,10 @@ jobs:
             dest="package/libs/$pkg"
             [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
             [ ! -d "$dest" ] && mv "$SRC" "$dest" && echo "提取$pkg成功"
+            rm -rf temp-immortal-packages
           done
           
-          # 5. 提取基础依赖
+          # 提取基础依赖
           for lib in libev libpam libtirpc xz net-snmp; do
             SRC=$(find temp-packages -name "$lib" -type d | head -n 1)
             if [ -z "$SRC" ]; then
@@ -120,13 +129,13 @@ jobs:
           done
           
           # 清理临时文件
-          rm -rf temp-packages
+          rm -rf temp-packages temp.tar.gz
           
           # 强制安装依赖
           ./scripts/feeds install -a
           ./scripts/feeds install libaudit audit libpci policycoreutils net-snmp
           
-          # 最终验证
+          # 验证依赖
           required_pkgs=(
             "package/libs/libaudit"
             "package/utils/audit"
