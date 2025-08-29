@@ -38,7 +38,7 @@ jobs:
           
           df -h
 
-      - name: 配置feeds并手动添加缺失依赖库（修正仓库地址）
+      - name: 配置feeds并手动添加缺失依赖库（修正xz路径）
         run: |
           # 仅保留官方源
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
@@ -48,49 +48,50 @@ jobs:
           ./scripts/feeds clean
           ./scripts/feeds update -f -a
           
-          # 彻底删除冲突包（避免依赖检查）
+          # 彻底删除冲突包
           rm -rf package/utils/audit package/utils/busybox package/boot/kexec-tools \
                  package/network/services/lldpd package/utils/policycoreutils
           
-          # 手动克隆官方packages源中的依赖库（修正地址）
-          # 临时克隆整个packages源（仅获取需要的库）
+          # 临时克隆packages源
           if [ ! -d "package/feeds/packages" ]; then
             git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
           fi
           
-          # libev（来自packages源的libs目录）
-          if [ ! -d "package/libs/libev" ]; then
+          # 提取所需依赖库（修正路径和命名）
+          # libev
+          if [ ! -d "package/libs/libev" ] && [ -d "package/feeds/packages/libs/libev" ]; then
             mv package/feeds/packages/libs/libev package/libs/
           fi
           
-          # libpam（来自packages源的libs目录，修正地址）
-          if [ ! -d "package/libs/libpam" ]; then
+          # libpam
+          if [ ! -d "package/libs/libpam" ] && [ -d "package/feeds/packages/libs/libpam" ]; then
             mv package/feeds/packages/libs/libpam package/libs/
           fi
           
-          # libtirpc（来自packages源的libs目录，修正地址）
-          if [ ! -d "package/libs/libtirpc" ]; then
+          # libtirpc
+          if [ ! -d "package/libs/libtirpc" ] && [ -d "package/feeds/packages/libs/libtirpc" ]; then
             mv package/feeds/packages/libs/libtirpc package/libs/
           fi
           
-          # liblzma（来自packages源的libs目录）
-          if [ ! -d "package/libs/liblzma" ]; then
-            mv package/feeds/packages/libs/xz package/libs/liblzma
+          # liblzma（直接使用xz包，无需重命名）
+          if [ ! -d "package/libs/xz" ] && [ -d "package/feeds/packages/libs/xz" ]; then
+            mv package/feeds/packages/libs/xz package/libs/
           fi
           
-          # libnetsnmp（来自packages源的net目录）
-          if [ ! -d "package/libs/libnetsnmp" ]; then
-            mv package/feeds/packages/net/net-snmp package/libs/libnetsnmp
+          # libnetsnmp（来自net-snmp）
+          if [ ! -d "package/libs/net-snmp" ] && [ -d "package/feeds/packages/net/net-snmp" ]; then
+            mv package/feeds/packages/net/net-snmp package/libs/
           fi
           
-          # 清理临时克隆的packages源
+          # 清理临时文件
           rm -rf package/feeds/packages
           
-          # 安装所有包（包括手动添加的依赖库）
+          # 安装所有包
           ./scripts/feeds install -a
           
-          # 验证依赖库是否添加成功
-          for lib in libev libpam libtirpc liblzma libnetsnmp; do
+          # 验证依赖库
+          required_libs=("libev" "libpam" "libtirpc" "xz" "net-snmp")
+          for lib in "${required_libs[@]}"; do
             if [ ! -d "package/libs/$lib" ]; then
               echo "错误：依赖库 $lib 未成功添加"
               exit 1
@@ -113,18 +114,18 @@ jobs:
           export TERM=dumb
           make distclean
           
-          # 生成极简配置
+          # 生成极简配置（使用正确的依赖库名称）
           cat > .config <<EOF
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y
           CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
-          # 显式启用手动添加的依赖库
+          # 显式启用依赖库（使用实际包名）
           CONFIG_PACKAGE_libev=y
           CONFIG_PACKAGE_libpam=y
           CONFIG_PACKAGE_libtirpc=y
-          CONFIG_PACKAGE_liblzma=y
-          CONFIG_PACKAGE_libnetsnmp=y
+          CONFIG_PACKAGE_xz=y  # 直接使用xz包（包含liblzma）
+          CONFIG_PACKAGE_net-snmp=y  # 使用net-snmp包（包含libnetsnmp）
           EOF
           
           # 生成完整配置
