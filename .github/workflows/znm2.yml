@@ -32,126 +32,86 @@ jobs:
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
+          # 安装git-lfs确保大文件克隆正常
+          sudo apt install -y git-lfs
 
-      - name: 配置依赖（修复security源）
+      - name: 配置依赖（不依赖security源）
         run: |
-          # 关键修复：使用正确的security源地址（验证有效）
+          # 仅使用稳定的核心源，移除security源
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
-          # 修正security源地址（官方安全源的正确路径）
-          echo "src-git security https://git.openwrt.org/feed/security.git;master" >> feeds.conf.default
           
           ./scripts/feeds clean
+          ./scripts/feeds update -f -a  # 仅更新核心源
           
-          # 关键：单独更新security源并检查是否成功
-          echo "===== 更新security源 ====="
-          ./scripts/feeds update -f security || {
-            echo "错误：security源更新失败，尝试备用地址..."
-            # 备用源：GitHub镜像（若官方源不可访问）
-            sed -i 's#https://git.openwrt.org/feed/security.git#https://github.com/openwrt/security-feed.git#' feeds.conf.default
-            ./scripts/feeds update -f security || {
-              echo "错误：备用security源也无法访问"
-              exit 1
-            }
-          }
-          
-          # 更新其他源
-          ./scripts/feeds update -f packages luci routing
-          
-          # 验证security源目录是否存在
-          if [ ! -d "feeds/security" ]; then
-            echo "错误：security源克隆失败，目录不存在"
-            ls -lh feeds/  # 列出所有feed目录，确认问题
-            exit 1
-          fi
-          
-          # 仅删除冲突包
-          rm -rf package/utils/audit
-          
-          # 1. 从security源搜索libaudit（优先）
-          echo "===== 从security源搜索libaudit ====="
-          LIBAUDIT_SOURCE=$(find feeds/security -name "libaudit" -type d | head -n 1)
-          
-          # 2. 若security源无结果，从其他feed搜索
-          if [ -z "$LIBAUDIT_SOURCE" ]; then
-            echo "security源中未找到libaudit，从其他feed搜索..."
-            LIBAUDIT_SOURCE=$(find feeds/packages -name "libaudit" -type d | head -n 1)
-          fi
-          
-          # 3. 若仍无结果，手动克隆
-          if [ -z "$LIBAUDIT_SOURCE" ]; then
-            echo "未从feed找到libaudit，尝试手动克隆..."
-            if [ ! -d "package/libs/libaudit" ]; then
-              git clone --depth=1 https://github.com/openwrt/security-feed.git temp-security || {
-                echo "手动克隆安全源失败，尝试主packages仓库..."
-                git clone --depth=1 https://github.com/openwrt/packages.git temp-packages
-              }
-              LIBAUDIT_SOURCE=$(find temp-security temp-packages -name "libaudit" -type d | head -n 1)
-              if [ -n "$LIBAUDIT_SOURCE" ]; then
-                mv "$LIBAUDIT_SOURCE" package/libs/
-                echo "手动提取libaudit成功（来源：$LIBAUDIT_SOURCE）"
-              else
-                echo "错误：所有来源均未找到libaudit"
+          # 关键修复：直接从packages主源或历史仓库提取libaudit等依赖
+          # 1. 克隆完整的packages源（确保包含历史版本）
+          if [ ! -d "temp-packages" ]; then
+            git clone --depth=50 https://git.openwrt.org/feed/packages.git temp-packages || {
+              # 备用：使用GitHub镜像（增加认证参数兼容）
+              echo "主packages源克隆失败，尝试GitHub镜像..."
+              git clone --depth=50 https://github.com/openwrt/packages.git temp-packages || {
+                echo "所有packages源均无法访问"
                 exit 1
-              fi
-              rm -rf temp-security temp-packages
-            fi
-          else
-            mv "$LIBAUDIT_SOURCE" package/libs/
-            echo "从feed提取libaudit成功（来源：$LIBAUDIT_SOURCE）"
+              }
+            }
           fi
           
-          # 处理audit/host依赖
-          echo "===== 搜索audit/host ====="
-          AUDIT_HOST_SOURCE=$(find feeds/ -name "audit" -type d | head -n 1)
+          # 2. 提取libaudit（从temp-packages中搜索）
+          echo "===== 从packages源搜索libaudit ====="
+          LIBAUDIT_SOURCE=$(find temp-packages -name "libaudit" -type d | head -n 1)
+          if [ -z "$LIBAUDIT_SOURCE" ]; then
+            echo "错误：未找到libaudit，尝试特定版本路径..."
+            # 已知可能的路径（根据OpenWrt历史提交）
+            if [ -d "temp-packages/libs/libaudit" ]; then
+              LIBAUDIT_SOURCE="temp-packages/libs/libaudit"
+            elif [ -d "temp-packages/security/libaudit" ]; then
+              LIBAUDIT_SOURCE="temp-packages/security/libaudit"
+            else
+              echo "错误：所有路径均未找到libaudit"
+              exit 1
+            fi
+          fi
+          [ ! -d "package/libs/libaudit" ] && mv "$LIBAUDIT_SOURCE" package/libs/ && echo "提取libaudit成功"
           
+          # 3. 提取audit/host
+          echo "===== 搜索audit/host ====="
+          AUDIT_HOST_SOURCE=$(find temp-packages -name "audit" -type d | head -n 1)
           if [ -z "$AUDIT_HOST_SOURCE" ]; then
-            echo "未从feed找到audit，尝试手动克隆..."
-            git clone --depth=1 https://github.com/openwrt/packages.git temp-packages
-            AUDIT_HOST_SOURCE=$(find temp-packages -name "audit" -type d | head -n 1)
-            if [ -n "$AUDIT_HOST_SOURCE" ]; then
-              mv "$AUDIT_HOST_SOURCE" package/utils/
-              echo "手动提取audit成功"
+            echo "错误：未找到audit，尝试特定路径..."
+            if [ -d "temp-packages/utils/audit" ]; then
+              AUDIT_HOST_SOURCE="temp-packages/utils/audit"
             else
               echo "错误：未找到audit/host"
               exit 1
             fi
-            rm -rf temp-packages
-          else
-            mv "$AUDIT_HOST_SOURCE" package/utils/
-            echo "从feed提取audit成功"
           fi
+          [ ! -d "package/utils/audit" ] && mv "$AUDIT_HOST_SOURCE" package/utils/ && echo "提取audit成功"
           
-          # 搜索其他依赖
+          # 4. 提取其他依赖（均从temp-packages中获取）
           for pkg in libpci policycoreutils; do
             echo "===== 搜索$pkg ====="
-            SRC=$(find feeds/ -name "$pkg" -type d | head -n 1)
+            SRC=$(find temp-packages -name "$pkg" -type d | head -n 1)
             if [ -z "$SRC" ]; then
-              echo "未从feed找到$pkg，尝试手动克隆..."
-              git clone --depth=1 https://github.com/openwrt/packages.git temp-packages
-              SRC=$(find temp-packages -name "$pkg" -type d | head -n 1)
-              if [ -n "$SRC" ]; then
-                dest="package/libs/$pkg"
-                [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
-                mv "$SRC" "$dest"
-                echo "手动提取$pkg成功"
+              echo "错误：未找到$pkg，尝试特定路径..."
+              if [ "$pkg" = "libpci" ] && [ -d "temp-packages/libs/libpci" ]; then
+                SRC="temp-packages/libs/libpci"
+              elif [ "$pkg" = "policycoreutils" ] && [ -d "temp-packages/utils/policycoreutils" ]; then
+                SRC="temp-packages/utils/policycoreutils"
               else
                 echo "错误：未找到$pkg"
                 exit 1
               fi
-              rm -rf temp-packages
-            else
-              dest="package/libs/$pkg"
-              [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
-              mv "$SRC" "$dest"
-              echo "从feed提取$pkg成功"
             fi
+            dest="package/libs/$pkg"
+            [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
+            [ ! -d "$dest" ] && mv "$SRC" "$dest" && echo "提取$pkg成功"
           done
           
-          # 提取其他基础依赖
+          # 5. 提取基础依赖
           for lib in libev libpam libtirpc xz net-snmp; do
-            SRC=$(find feeds/ -name "$lib" -type d | head -n 1)
+            SRC=$(find temp-packages -name "$lib" -type d | head -n 1)
             if [ -z "$SRC" ]; then
               echo "错误：未找到$lib"
               exit 1
@@ -159,10 +119,12 @@ jobs:
             [ ! -d "package/libs/$lib" ] && mv "$SRC" package/libs/ && echo "提取$lib成功"
           done
           
-          # 强制安装所有依赖
+          # 清理临时文件
+          rm -rf temp-packages
+          
+          # 强制安装依赖
           ./scripts/feeds install -a
-          ./scripts/feeds install -p security libaudit  # 从security源安装
-          ./scripts/feeds install -p packages audit libpci policycoreutils
+          ./scripts/feeds install libaudit audit libpci policycoreutils net-snmp
           
           # 最终验证
           required_pkgs=(
