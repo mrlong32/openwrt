@@ -1,207 +1,98 @@
-name: Build ZN-M2 Firmware
+name: ZN-M2 Firmware Build
 
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-zn-m2.dts'
-      - 'target/linux/qualcommax/image/ipq60xx.mk'
-      - '.github/workflows/build-zn-m2-only.yml'
-  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    timeout-minutes: 180
-
     steps:
-      - name: 检出代码
+      - name: 检查环境依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev gawk git subversion libssl-dev gettext zlib1g-dev swig unzip time rsync
+
+      - name: 克隆官方OpenWrt源码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          repository: openwrt/openwrt
+          path: openwrt-official
+          ref: main  # 确保与libwrt版本兼容（如均为6.x分支）
+
+      - name: 克隆libwrt源码
+        uses: actions/checkout@v4
+        with:
+          repository: LiBwrt/openwrt-6.x
+          path: libwrt
           ref: main
-          submodules: 'recursive'
 
-      - name: 系统环境准备
+      - name: 合并libwrt的zn-m2硬件支持
         run: |
-          free -h
-          df -h
-          sudo fallocate -l 12G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          sudo apt install -y git-lfs
-
-      - name: 配置依赖（使用LiBwrt源）
-        run: |
-          echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
-          echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
-          echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
+          cd openwrt-official
           
-          ./scripts/feeds clean
-          ./scripts/feeds update -f -a
+          # 复制zn-m2设备树文件（需替换[架构]为实际架构，如ramips、ath79等）
+          ARCH="ramips"  # 假设zn-m2属于ramips架构，需根据实际情况修改
+          mkdir -p target/linux/$ARCH/dts
+          cp ../libwrt/target/linux/$ARCH/dts/zn-m2.dts target/linux/$ARCH/dts/
           
-          # 使用指定的LiBwrt源
-          LIBWRT_REPO="https://github.com/LiBwrt/openwrt-6.x"
-          echo "从 $LIBWRT_REPO 提取依赖..."
-          rm -rf temp-libwrt
-          git clone --depth=1 "$LIBWRT_REPO" temp-libwrt || {
-            echo "LiBwrt源克隆失败"
-            exit 1
-          }
+          # 复制zn-m2的默认配置
+          cp ../libwrt/configs/zn-m2_defconfig .config
           
-          # 提取libaudit
-          echo "===== 提取libaudit ====="
-          libaudit_paths=(
-            "libs/libaudit"
-            "security/libaudit"
-            "utils/libaudit"
-            "libs/audit-libs"
-          )
-          found=0
-          for path in "${libaudit_paths[@]}"; do
-            if [ -d "temp-libwrt/$path" ]; then
-              [ ! -d "package/libs/libaudit" ] && mv "temp-libwrt/$path" package/libs/libaudit && {
-                echo "找到libaudit（路径：$path）"
-                found=1
-                break
-              }
-            fi
-          done
-          if [ $found -eq 0 ]; then
-            echo "错误：LiBwrt源中未找到libaudit"
-            exit 1
+          # 合并驱动补丁（如有）
+          if [ -d ../libwrt/package/kernel/zn-m2-drivers ]; then
+            cp -r ../libwrt/package/kernel/zn-m2-drivers package/kernel/
           fi
-          
-          # 提取audit/host
-          echo "===== 提取audit ====="
-          audit_paths=(
-            "utils/audit"
-            "security/audit"
-          )
-          found=0
-          for path in "${audit_paths[@]}"; do
-            if [ -d "temp-libwrt/$path" ]; then
-              [ ! -d "package/utils/audit" ] && mv "temp-libwrt/$path" package/utils/audit && {
-                echo "找到audit（路径：$path）"
-                found=1
-                break
-              }
-            fi
-          done
-          if [ $found -eq 0 ]; then
-            echo "错误：LiBwrt源中未找到audit"
-            exit 1
-          fi
-          
-          # 提取其他依赖
-          for pkg in libpci policycoreutils libev libpam libtirpc xz net-snmp; do
-            echo "===== 提取$pkg ====="
-            src=$(find temp-libwrt -name "$pkg" -type d | head -n 1)
-            if [ -z "$src" ]; then
-              echo "错误：LiBwrt源中未找到$pkg"
-              exit 1
-            fi
-            dest="package/libs/$pkg"
-            [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
-            [ ! -d "$dest" ] && mv "$src" "$dest" && echo "提取$pkg成功"
-          done
-          
-          # 清理临时文件
-          rm -rf temp-libwrt
-          
-          # 安装依赖
-          ./scripts/feeds install -a
-          ./scripts/feeds install libaudit audit libpci policycoreutils net-snmp
-          
-          # 验证依赖
-          required_pkgs=(
-            "package/libs/libaudit"
-            "package/utils/audit"
-            "package/libs/libpci"
-            "package/utils/policycoreutils"
-          )
-          for pkg in "${required_pkgs[@]}"; do
-            if [ ! -d "$pkg" ]; then
-              echo "错误：关键依赖 $pkg 缺失"
-              exit 1
-            fi
-          done
 
-      - name: 修复设备树
+      - name: 精简固件配置
         run: |
-          DTSI_FILE="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-cmiot.dtsi"
-          [ -f "$DTSI_FILE" ] && sed -i 's/#include "ipq6018-nss.dtsi"/\/\/&/' "$DTSI_FILE"
-
-      - name: 生成配置
-        run: |
-          make distclean
-          cat > .config <<EOF
-          CONFIG_TARGET_qualcommax=y
-          CONFIG_TARGET_qualcommax_ipq60xx=y
-          CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y
-          CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
-          CONFIG_PACKAGE_busybox=y
-          CONFIG_PACKAGE_libaudit=y
-          CONFIG_PACKAGE_audit=y
-          CONFIG_PACKAGE_libpci=y
-          CONFIG_PACKAGE_policycoreutils=y
-          CONFIG_PACKAGE_net-snmp=y
-          CONFIG_PACKAGE_libev=y
-          CONFIG_PACKAGE_libpam=y
-          CONFIG_PACKAGE_libtirpc=y
-          CONFIG_PACKAGE_xz=y
-          CONFIG_PACKAGE_audit_HOST=y
-          CONFIG_PACKAGE_policycoreutils_HOST=y
-          EOF
+          cd openwrt-official
+          
+          # 更新feeds
+          ./scripts/feeds update -a && ./scripts/feeds install -a
+          
+          # 加载默认配置并启用精简选项
           make defconfig
-
-      - name: 编译工具链
-        run: |
-          make -j1 toolchain/compile V=s 2> toolchain-errors.log
-          if [ -s toolchain-errors.log ]; then
-            echo "工具链编译错误："
-            cat toolchain-errors.log
-            exit 1
-          fi
-
-      - name: 验证工具链
-        run: |
-          TOOLCHAIN_DIR=$(find staging_dir/ -maxdepth 1 -type d -name "toolchain-aarch64_cortex-a53_*_musl" | head -n 1)
-          [ -z "$TOOLCHAIN_DIR" ] && { echo "工具链目录缺失"; exit 1; }
-          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
-          [ -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ] || { echo "编译器缺失"; exit 1; }
-          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || exit 1
+          
+          # 通过命令行禁用不必要组件（进一步精简）
+          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=8" >> .config  # 减小根分区大小
+          echo "CONFIG_PACKAGE_dnsmasq=y" >> .config         # 用轻量dnsmasq替代dnsmasq-full
+          echo "CONFIG_PACKAGE_dropbear=y" >> .config        # 保留SSH
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config       # 保留基础LuCI
+          echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config  # 轻量主题
+          echo "# CONFIG_PACKAGE_wget is not set" >> .config  # 移除wget
+          echo "# CONFIG_PACKAGE_curl is not set" >> .config  # 移除curl
+          echo "# CONFIG_PACKAGE_opkg is not set" >> .config  # 如需离线使用，可移除opkg
+          echo "# CONFIG_IPV6 is not set" >> .config          # 按需禁用IPv6
+          
+          # 生成最终配置
+          make defconfig
 
       - name: 编译固件
         run: |
-          make -j2 V=s 2> firmware-errors.log
-          if [ -s firmware-errors.log ]; then
-            echo "固件编译错误："
-            cat firmware-errors.log
-            exit 1
-          fi
+          cd openwrt-official
+          # 下载依赖
+          make download -j$(nproc)
+          # 开始编译（启用日志）
+          make -j$(nproc) V=s BUILD_LOG=1
 
-      - name: 检查产物
-        run: |
-          FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
-          ls $FIRMWARE_DIR/*zn_zn-m2*.bin || { echo "固件缺失"; exit 1; }
-
-      - name: 上传固件
-        if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: zn-m2-${{ github.run_id }}
-          files: bin/targets/qualcommax/ipq60xx/*zn_zn-m2*.bin
-
-      - name: 上传错误日志
-        if: failure()
+      - name: 上传编译日志
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: error-logs
-          path: |
-            toolchain-errors.log
-            firmware-errors.log
-          retention-days: 14
+          name: build-logs
+          path: openwrt-official/logs/
+
+      - name: 上传固件产物
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: zn-m2-firmware
+          path: openwrt-official/bin/targets/*/*/*.bin
