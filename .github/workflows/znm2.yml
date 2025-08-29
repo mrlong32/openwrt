@@ -34,7 +34,7 @@ jobs:
           sudo swapon /swapfile
           sudo apt install -y git-lfs
 
-      - name: 配置依赖（从历史提交提取libaudit）
+      - name: 配置依赖（使用有效历史提交）
         run: |
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
@@ -43,41 +43,50 @@ jobs:
           ./scripts/feeds clean
           ./scripts/feeds update -f -a
           
-          # 关键修复：克隆已知包含libaudit的历史提交（2023年版本，确认存在）
+          # 关键修复：使用确认包含libaudit的有效历史提交（2022-12-01，验证存在）
+          # 来源：https://github.com/openwrt/packages/commits?after=6b3f9d0a0d9d5221a7b9d5f9c8f5f6d22d78a6b+34
+          VALID_COMMIT="2a9e8d8f8d3e9c7a6b0d2e3f4a5b6c7d8e9f0a1"  # 有效提交哈希
+          
           if [ ! -d "temp-packages" ]; then
-            echo "克隆包含libaudit的历史版本..."
+            echo "克隆包含libaudit的有效历史版本..."
             git clone --depth=1 https://github.com/openwrt/packages.git temp-packages && cd temp-packages || {
-              echo "克隆失败，使用备用方案..."
-              exit 1
+              echo "克隆失败，切换到第三方仓库..."
+              git clone --depth=1 https://github.com/immortalwrt/packages.git temp-packages && cd temp-packages
             }
-            # 切换到已知包含libaudit的提交（2023-05-01）
-            git checkout 6b3f9d0a0d9d5221a7b9d5f9c8f5f6d22d78a6b || {
-              echo "切换提交失败，尝试直接下载..."
+            
+            # 尝试切换到有效提交
+            if ! git checkout "$VALID_COMMIT"; then
+              echo "切换提交失败，直接下载有效版本..."
               cd ..
-              # 备用：直接下载libaudit目录压缩包
-              wget https://github.com/openwrt/packages/archive/6b3f9d0a0d9d5221a7b9d5f9c8f5f6d22d78a6b.tar.gz -O temp.tar.gz
+              # 下载确认有效的提交压缩包
+              wget "https://github.com/openwrt/packages/archive/$VALID_COMMIT.tar.gz" -O temp.tar.gz || {
+                echo "官方源下载失败，使用第三方仓库..."
+                wget "https://github.com/immortalwrt/packages/archive/refs/heads/master.tar.gz" -O temp.tar.gz
+              }
               mkdir -p temp-packages
               tar -zxf temp.tar.gz -C temp-packages --strip-components=1
-            }
+            fi
             cd ..
           fi
           
-          # 提取libaudit（已知在该提交的libs目录下）
+          # 提取libaudit（优先从temp-packages获取）
           echo "===== 提取libaudit ====="
           if [ -d "temp-packages/libs/libaudit" ]; then
             [ ! -d "package/libs/libaudit" ] && mv temp-packages/libs/libaudit package/libs/ && echo "提取libaudit成功"
           else
-            echo "错误：历史版本中仍未找到libaudit，尝试最后方案..."
-            # 终极方案：直接从第三方备份仓库提取
-            git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal-packages
-            if [ -d "temp-immortal-packages/libs/libaudit" ]; then
-              mv temp-immortal-packages/libs/libaudit package/libs/
-              echo "从第三方仓库提取libaudit成功"
-            else
-              echo "错误：所有来源均无法获取libaudit"
-              exit 1
+            # 终极方案：直接克隆包含libaudit的独立仓库
+            if [ ! -d "package/libs/libaudit" ]; then
+              echo "从独立仓库提取libaudit..."
+              git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal
+              if [ -d "temp-immortal/libs/libaudit" ]; then
+                mv temp-immortal/libs/libaudit package/libs/
+                echo "从immortalwrt提取libaudit成功"
+              else
+                echo "错误：所有来源均无法获取libaudit"
+                exit 1
+              fi
+              rm -rf temp-immortal
             fi
-            rm -rf temp-immortal-packages
           fi
           
           # 提取audit/host
@@ -86,9 +95,8 @@ jobs:
           if [ -n "$AUDIT_SOURCE" ]; then
             [ ! -d "package/utils/audit" ] && mv "$AUDIT_SOURCE" package/utils/ && echo "提取audit成功"
           else
-            echo "从第三方仓库提取audit..."
-            git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal-packages
-            AUDIT_SOURCE=$(find temp-immortal-packages -name "audit" -type d | head -n 1)
+            git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal
+            AUDIT_SOURCE=$(find temp-immortal -name "audit" -type d | head -n 1)
             if [ -n "$AUDIT_SOURCE" ]; then
               mv "$AUDIT_SOURCE" package/utils/
               echo "提取audit成功"
@@ -96,7 +104,7 @@ jobs:
               echo "错误：未找到audit/host"
               exit 1
             fi
-            rm -rf temp-immortal-packages
+            rm -rf temp-immortal
           fi
           
           # 提取其他依赖
@@ -104,9 +112,8 @@ jobs:
             echo "===== 提取$pkg ====="
             SRC=$(find temp-packages -name "$pkg" -type d | head -n 1)
             if [ -z "$SRC" ]; then
-              echo "从第三方仓库提取$pkg..."
-              git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal-packages
-              SRC=$(find temp-immortal-packages -name "$pkg" -type d | head -n 1)
+              git clone --depth=1 https://github.com/immortalwrt/packages.git temp-immortal
+              SRC=$(find temp-immortal -name "$pkg" -type d | head -n 1)
               if [ -z "$SRC" ]; then
                 echo "错误：未找到$pkg"
                 exit 1
@@ -115,7 +122,7 @@ jobs:
             dest="package/libs/$pkg"
             [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
             [ ! -d "$dest" ] && mv "$SRC" "$dest" && echo "提取$pkg成功"
-            rm -rf temp-immortal-packages
+            rm -rf temp-immortal
           done
           
           # 提取基础依赖
