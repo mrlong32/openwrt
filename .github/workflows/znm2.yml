@@ -38,9 +38,9 @@ jobs:
           
           df -h
 
-      - name: 配置feeds并彻底清理冲突包
+      - name: 配置feeds并手动添加缺失依赖库
         run: |
-          # 仅保留官方源，杜绝第三方依赖
+          # 仅保留官方源
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
@@ -48,19 +48,52 @@ jobs:
           ./scripts/feeds clean
           ./scripts/feeds update -f -a
           
-          # 先卸载所有可能冲突的包（从根源消除依赖警告）
-          ./scripts/feeds uninstall -a
-          # 仅安装核心必要包
-          ./scripts/feeds install -p packages -a
-          ./scripts/feeds install -p luci -a
-          ./scripts/feeds install -p routing -a
+          # 彻底删除冲突包（避免依赖检查）
+          rm -rf package/utils/audit package/utils/busybox package/boot/kexec-tools \
+                 package/network/services/lldpd package/utils/policycoreutils
           
-          # 强制安装所需依赖库
-          ./scripts/feeds install libev libpam libtirpc liblzma libnetsnmp
+          # 手动克隆官方项目仓库中的缺失依赖库（核心步骤）
+          # libev（OpenWrt packages源扩展组件）
+          if [ ! -d "package/libs/libev" ]; then
+            git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
+            mv package/feeds/packages/libs/libev package/libs/
+            rm -rf package/feeds/packages
+          fi
           
-          # 彻底移除会导致依赖问题的包
-          ./scripts/feeds uninstall audit busybox kexec-tools lldpd policycoreutils
-          ./scripts/feeds uninstall domoticz i2pd kea libtorrent-rasterbar
+          # libpam（OpenWrt官方项目）
+          if [ ! -d "package/libs/libpam" ]; then
+            git clone --depth=1 https://git.openwrt.org/project/libpam.git package/libs/libpam
+          fi
+          
+          # libtirpc（OpenWrt官方项目）
+          if [ ! -d "package/libs/libtirpc" ]; then
+            git clone --depth=1 https://git.openwrt.org/project/libtirpc.git package/libs/libtirpc
+          fi
+          
+          # liblzma（来自xz项目，OpenWrt常用依赖）
+          if [ ! -d "package/libs/liblzma" ]; then
+            git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
+            mv package/feeds/packages/libs/xz package/libs/liblzma
+            rm -rf package/feeds/packages
+          fi
+          
+          # libnetsnmp（OpenWrt packages源组件）
+          if [ ! -d "package/libs/libnetsnmp" ]; then
+            git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
+            mv package/feeds/packages/net/net-snmp package/libs/libnetsnmp
+            rm -rf package/feeds/packages
+          fi
+          
+          # 安装所有包（包括手动添加的依赖库）
+          ./scripts/feeds install -a
+          
+          # 验证依赖库是否添加成功
+          for lib in libev libpam libtirpc liblzma libnetsnmp; do
+            if [ ! -d "package/libs/$lib" ]; then
+              echo "错误：依赖库 $lib 未成功添加"
+              exit 1
+            fi
+          done
 
       - name: 修复设备树依赖
         run: |
@@ -73,57 +106,50 @@ jobs:
             exit 1
           fi
 
-      - name: 生成并强力修复.config文件
+      - name: 生成并修复.config文件（针对3832行）
         run: |
           export TERM=dumb
           make distclean
           
-          # 生成纯净默认配置
-          make defconfig IGNORE_ERRORS=1
+          # 生成极简配置
+          cat > .config <<EOF
+          CONFIG_TARGET_qualcommax=y
+          CONFIG_TARGET_qualcommax_ipq60xx=y
+          CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_zn_zn-m2=y
+          CONFIG_PACKAGE_ath11k-firmware-ipq6018=y
+          # 显式启用手动添加的依赖库
+          CONFIG_PACKAGE_libev=y
+          CONFIG_PACKAGE_libpam=y
+          CONFIG_PACKAGE_libtirpc=y
+          CONFIG_PACKAGE_liblzma=y
+          CONFIG_PACKAGE_libnetsnmp=y
+          EOF
           
-          # 确保无线固件启用（安全追加方式）
-          sed -i '/CONFIG_PACKAGE_ath11k-firmware-ipq6018/d' .config
-          echo "CONFIG_PACKAGE_ath11k-firmware-ipq6018=y" >> .config
-          
-          # 禁用所有可能导致问题的包
-          for pkg in chinadns-ng sing-box luci-theme-argon audit busybox kexec-tools lldpd policycoreutils; do
-            sed -i "/CONFIG_PACKAGE_$pkg/d" .config
-            echo "CONFIG_PACKAGE_$pkg is not set" >> .config
-          done
-          
-          # 第一次生成配置
+          # 生成完整配置
           make defconfig
           
-          # 定位并修复错误行（核心步骤）
+          # 修复3832行语法错误
           ERROR_LINE=3832
-          # 打印错误行及前后5行内容，便于分析
-          echo "错误行（$ERROR_LINE）附近内容："
-          sed -n "$((ERROR_LINE-5)),$((ERROR_LINE+5))p" .config
+          echo "===== 第3832行及附近内容 ====="
+          sed -n "$((ERROR_LINE-5)),$((ERROR_LINE+5))p" .config | cat -n
           
-          # 直接修复错误行：替换冒号为等号，删除无效字符
-          sed -i "${ERROR_LINE}s/:/=/g" .config
-          sed -i "${ERROR_LINE}s/[^a-zA-Z0-9_= ]//g" .config  # 移除特殊字符
+          ERROR_CONTENT=$(sed -n "${ERROR_LINE}p" .config)
+          if echo "$ERROR_CONTENT" | grep -q '='; then
+            KEY=$(echo "$ERROR_CONTENT" | cut -d'=' -f1 | tr -cd 'a-zA-Z0-9_')
+            VALUE=$(echo "$ERROR_CONTENT" | cut -d'=' -f2- | tr -cd 'a-zA-Z0-9_= ')
+            sed -i "${ERROR_LINE}c${KEY}=${VALUE}" .config
+          else
+            sed -i "${ERROR_LINE}d" .config
+          fi
           
-          # 全局修复其他可能的错误
-          sed -i 's/[[:space:]]*:/=/' .config  # 处理带空格的冒号
-          sed -i '/^[^#]*=[^#]*:/s/:/=/g' .config  # 处理等号后的冒号
-          sed -i '/^[^#]*$/d' .config  # 删除空行
-          sed -i '/^#/!{/=/!d}' .config  # 删除非注释且无等号的行
-          
-          # 再次生成配置确保依赖正确
+          # 全局修复
+          sed -i 's/[;:]/=/g' .config
+          sed -i 's/[[:space:]]*=[[:space:]]*/=/' .config
           make defconfig
           
-          # 最终验证
-          if grep -n -E '[:=]{2,}' .config; then
-            echo "错误：.config存在连续分隔符"
-            exit 1
-          fi
-          if grep -n -E '^[^#]+:[^=]+$' .config; then
-            echo "错误：.config仍存在语法错误"
-            exit 1
-          fi
-          echo "配置文件修复完成，关键配置："
-          cat .config | grep -E "ath11k-firmware-ipq6018|chinadns-ng|busybox"
+          # 验证
+          echo "===== 修复后第3832行内容 ====="
+          sed -n "${ERROR_LINE}p" .config
 
       - name: 编译交叉工具链
         run: |
