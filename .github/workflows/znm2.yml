@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-    timeout-minutes: 180  # 延长超时时间，避免中途中断
+    timeout-minutes: 180
 
     steps:
       - name: 检出代码
@@ -26,16 +26,14 @@ jobs:
 
       - name: 系统环境准备
         run: |
-          # 仅保留必要的资源检查
           free -h
           df -h
-          # 增加swap确保编译不中断
           sudo fallocate -l 12G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 配置依赖（简化输出）
+      - name: 配置依赖
         run: |
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
@@ -44,11 +42,9 @@ jobs:
           ./scripts/feeds clean > /dev/null 2>&1
           ./scripts/feeds update -f -a > /dev/null 2>&1
           
-          # 删除冲突包
           rm -rf package/utils/audit package/utils/busybox package/boot/kexec-tools \
                  package/network/services/lldpd package/utils/policycoreutils
           
-          # 快速添加依赖（不输出冗余信息）
           [ ! -d "package/feeds/packages" ] && git clone --quiet https://git.openwrt.org/feed/packages.git package/feeds/packages
           
           XZ_SOURCE=$(find package/feeds/packages -path "*/xz" | head -n 1)
@@ -86,20 +82,49 @@ jobs:
           EOF
           make defconfig > /dev/null 2>&1
 
-      - name: 编译工具链（关闭冗余输出）
+      - name: 编译工具链
         run: |
-          # 只输出错误信息，其他内容重定向到文件
           make -j1 toolchain/compile V=0 2> toolchain-errors.log
-          # 检查是否有错误
           if [ -s toolchain-errors.log ]; then
             echo "工具链编译错误："
             cat toolchain-errors.log
             exit 1
           fi
 
-      - name: 编译固件（关闭冗余输出）
+      - name: 动态查找工具链目录并验证编译器
         run: |
-          # 同样只输出错误
+          # 关键修复：动态匹配工具链目录（包含GCC版本号）
+          TOOLCHAIN_DIR=$(find staging_dir/ -maxdepth 1 -type d -name "toolchain-aarch64_cortex-a53_*_musl" | head -n 1)
+          
+          if [ -z "$TOOLCHAIN_DIR" ]; then
+            echo "错误：未找到工具链目录"
+            ls -lh staging_dir/
+            exit 1
+          fi
+          
+          echo "找到工具链目录：$TOOLCHAIN_DIR"
+          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+          
+          # 验证二进制目录存在
+          if [ ! -d "$TOOLCHAIN_BIN" ]; then
+            echo "错误：工具链二进制目录缺失"
+            ls -lh "$TOOLCHAIN_DIR"
+            exit 1
+          fi
+          
+          # 验证编译器存在
+          COMPILER="$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc"
+          if [ ! -f "$COMPILER" ]; then
+            echo "错误：交叉编译器缺失"
+            ls -lh "$TOOLCHAIN_BIN"
+            exit 1
+          fi
+          
+          # 验证编译器可执行
+          $COMPILER --version || exit 1
+
+      - name: 编译固件
+        run: |
           make -j2 V=0 2> firmware-errors.log
           if [ -s firmware-errors.log ]; then
             echo "固件编译错误："
@@ -107,7 +132,7 @@ jobs:
             exit 1
           fi
 
-      - name: 检查产物（核心验证）
+      - name: 检查产物
         run: |
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
           if ls $FIRMWARE_DIR/*zn_zn-m2*.bin >/dev/null 2>&1; then
