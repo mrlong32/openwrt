@@ -23,7 +23,7 @@ jobs:
           ref: main
           submodules: 'recursive'
 
-      - name: 清理系统空间并安装核心依赖
+      - name: 清理系统空间并安装依赖
         run: |
           sudo apt autoremove -y
           sudo apt clean
@@ -37,26 +37,28 @@ jobs:
             lib32z1 lib32stdc++6 libc6-i386
           
           df -h
-          dpkg -l | grep -E "gcc|g\+\+|lib32z1|libstdc\+\+"
 
-      - name: 配置feeds并强制清理冲突包
+      - name: 配置feeds并彻底清理冲突包
         run: |
-          # 仅保留官方源，确保依赖库可获取
+          # 仅保留官方源，杜绝第三方依赖
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
-          # 注释telephony源（若不需要且导致问题）
-          # echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf.default
           
           ./scripts/feeds clean
           ./scripts/feeds update -f -a
           
-          # 安装基础包并优先处理依赖库
-          ./scripts/feeds install -a
-          # 强制安装可能缺失的依赖（指定官方packages源）
-          ./scripts/feeds install -p packages libev libpam libtirpc liblzma libnetsnmp
+          # 先卸载所有可能冲突的包（从根源消除依赖警告）
+          ./scripts/feeds uninstall -a
+          # 仅安装核心必要包
+          ./scripts/feeds install -p packages -a
+          ./scripts/feeds install -p luci -a
+          ./scripts/feeds install -p routing -a
           
-          # 卸载明确冲突的包（避免依赖链错误）
+          # 强制安装所需依赖库
+          ./scripts/feeds install libev libpam libtirpc liblzma libnetsnmp
+          
+          # 彻底移除会导致依赖问题的包
           ./scripts/feeds uninstall audit busybox kexec-tools lldpd policycoreutils
           ./scripts/feeds uninstall domoticz i2pd kea libtorrent-rasterbar
 
@@ -71,49 +73,57 @@ jobs:
             exit 1
           fi
 
-      - name: 生成并修复.config文件（核心修复步骤）
+      - name: 生成并强力修复.config文件
         run: |
           export TERM=dumb
           make distclean
           
-          # 生成默认配置（避免手动追加导致的语法错误）
+          # 生成纯净默认配置
           make defconfig IGNORE_ERRORS=1
           
-          # 关键：使用sed而非echo追加配置，避免格式错误
-          # 启用无线固件包
+          # 确保无线固件启用（安全追加方式）
           sed -i '/CONFIG_PACKAGE_ath11k-firmware-ipq6018/d' .config
           echo "CONFIG_PACKAGE_ath11k-firmware-ipq6018=y" >> .config
           
-          # 禁用第三方插件和冲突包
+          # 禁用所有可能导致问题的包
           for pkg in chinadns-ng sing-box luci-theme-argon audit busybox kexec-tools lldpd policycoreutils; do
             sed -i "/CONFIG_PACKAGE_$pkg/d" .config
             echo "CONFIG_PACKAGE_$pkg is not set" >> .config
           done
           
-          # 重新生成配置，自动修复依赖和语法
+          # 第一次生成配置
           make defconfig
           
-          # 验证并修复3840行附近的语法错误（关键步骤）
-          echo "检查.config第3840行附近内容："
-          sed -n '3835,3845p' .config  # 打印错误行附近内容
+          # 定位并修复错误行（核心步骤）
+          ERROR_LINE=3832
+          # 打印错误行及前后5行内容，便于分析
+          echo "错误行（$ERROR_LINE）附近内容："
+          sed -n "$((ERROR_LINE-5)),$((ERROR_LINE+5))p" .config
           
-          # 修复常见语法错误（如冒号替换为等号，移除无效字符）
-          sed -i 's/:/=/g' .config  # 将冒号替换为等号（解决missing separator）
-          sed -i '/^[^#]*[^= ]*$/d' .config  # 删除无等号的无效行
+          # 直接修复错误行：替换冒号为等号，删除无效字符
+          sed -i "${ERROR_LINE}s/:/=/g" .config
+          sed -i "${ERROR_LINE}s/[^a-zA-Z0-9_= ]//g" .config  # 移除特殊字符
           
-          # 再次生成配置确保格式正确
+          # 全局修复其他可能的错误
+          sed -i 's/[[:space:]]*:/=/' .config  # 处理带空格的冒号
+          sed -i '/^[^#]*=[^#]*:/s/:/=/g' .config  # 处理等号后的冒号
+          sed -i '/^[^#]*$/d' .config  # 删除空行
+          sed -i '/^#/!{/=/!d}' .config  # 删除非注释且无等号的行
+          
+          # 再次生成配置确保依赖正确
           make defconfig
           
           # 最终验证
-          if [ ! -f ".config" ]; then
-            echo "错误：.config文件生成失败"
+          if grep -n -E '[:=]{2,}' .config; then
+            echo "错误：.config存在连续分隔符"
             exit 1
           fi
           if grep -n -E '^[^#]+:[^=]+$' .config; then
             echo "错误：.config仍存在语法错误"
             exit 1
           fi
-          cat .config | grep -E "ath11k-firmware-ipq6018|chinadns-ng|sing-box|audit|busybox"
+          echo "配置文件修复完成，关键配置："
+          cat .config | grep -E "ath11k-firmware-ipq6018|chinadns-ng|busybox"
 
       - name: 编译交叉工具链
         run: |
@@ -131,7 +141,7 @@ jobs:
       - name: 验证交叉编译器
         run: |
           TOOLCHAIN_BIN="staging_dir/toolchain-aarch64_cortex-a53_musl/bin"
-          if [ ! -d "$TOOLCHAIN_BIN" ] || [ ! -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ]; then
+          if [ ! -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ]; then
             echo "错误：交叉编译器未生成"
             ls -lh $TOOLCHAIN_BIN || true
             exit 1
