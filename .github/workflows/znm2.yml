@@ -38,7 +38,7 @@ jobs:
           
           df -h
 
-      - name: 配置feeds并手动添加缺失依赖库
+      - name: 配置feeds并手动添加缺失依赖库（修正仓库地址）
         run: |
           # 仅保留官方源
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
@@ -52,37 +52,39 @@ jobs:
           rm -rf package/utils/audit package/utils/busybox package/boot/kexec-tools \
                  package/network/services/lldpd package/utils/policycoreutils
           
-          # 手动克隆官方项目仓库中的缺失依赖库（核心步骤）
-          # libev（OpenWrt packages源扩展组件）
+          # 手动克隆官方packages源中的依赖库（修正地址）
+          # 临时克隆整个packages源（仅获取需要的库）
+          if [ ! -d "package/feeds/packages" ]; then
+            git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
+          fi
+          
+          # libev（来自packages源的libs目录）
           if [ ! -d "package/libs/libev" ]; then
-            git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
             mv package/feeds/packages/libs/libev package/libs/
-            rm -rf package/feeds/packages
           fi
           
-          # libpam（OpenWrt官方项目）
+          # libpam（来自packages源的libs目录，修正地址）
           if [ ! -d "package/libs/libpam" ]; then
-            git clone --depth=1 https://git.openwrt.org/project/libpam.git package/libs/libpam
+            mv package/feeds/packages/libs/libpam package/libs/
           fi
           
-          # libtirpc（OpenWrt官方项目）
+          # libtirpc（来自packages源的libs目录，修正地址）
           if [ ! -d "package/libs/libtirpc" ]; then
-            git clone --depth=1 https://git.openwrt.org/project/libtirpc.git package/libs/libtirpc
+            mv package/feeds/packages/libs/libtirpc package/libs/
           fi
           
-          # liblzma（来自xz项目，OpenWrt常用依赖）
+          # liblzma（来自packages源的libs目录）
           if [ ! -d "package/libs/liblzma" ]; then
-            git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
             mv package/feeds/packages/libs/xz package/libs/liblzma
-            rm -rf package/feeds/packages
           fi
           
-          # libnetsnmp（OpenWrt packages源组件）
+          # libnetsnmp（来自packages源的net目录）
           if [ ! -d "package/libs/libnetsnmp" ]; then
-            git clone --depth=1 https://git.openwrt.org/feed/packages.git package/feeds/packages
             mv package/feeds/packages/net/net-snmp package/libs/libnetsnmp
-            rm -rf package/feeds/packages
           fi
+          
+          # 清理临时克隆的packages源
+          rm -rf package/feeds/packages
           
           # 安装所有包（包括手动添加的依赖库）
           ./scripts/feeds install -a
