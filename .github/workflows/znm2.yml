@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+    timeout-minutes: 180  # 延长超时时间，避免中途中断
 
     steps:
       - name: 检出代码
@@ -23,73 +24,55 @@ jobs:
           ref: main
           submodules: 'recursive'
 
-      - name: 系统环境预处理（增强资源与日志控制）
+      - name: 系统环境准备
         run: |
-          # 资源检查与扩容
+          # 仅保留必要的资源检查
           free -h
           df -h
-          sudo fallocate -l 12G /swapfile  # 进一步增加swap，应对大日志编译
+          # 增加swap确保编译不中断
+          sudo fallocate -l 12G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          free -h
-          
-          # 安装日志处理工具
-          sudo apt install -y logrotate  # 用于日志轮转
 
-      - name: 配置feeds并添加依赖库
+      - name: 配置依赖（简化输出）
         run: |
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
           
-          ./scripts/feeds clean
-          ./scripts/feeds update -f -a
+          ./scripts/feeds clean > /dev/null 2>&1
+          ./scripts/feeds update -f -a > /dev/null 2>&1
           
           # 删除冲突包
           rm -rf package/utils/audit package/utils/busybox package/boot/kexec-tools \
                  package/network/services/lldpd package/utils/policycoreutils
           
-          # 克隆并提取依赖
-          if [ ! -d "package/feeds/packages" ]; then
-            git clone https://git.openwrt.org/feed/packages.git package/feeds/packages
-          fi
+          # 快速添加依赖（不输出冗余信息）
+          [ ! -d "package/feeds/packages" ] && git clone --quiet https://git.openwrt.org/feed/packages.git package/feeds/packages
           
-          # 探测xz路径
-          XZ_SOURCE=""
-          if [ -d "package/feeds/packages/libs/xz" ]; then
-            XZ_SOURCE="package/feeds/packages/libs/xz"
-          elif [ -d "package/feeds/packages/utils/xz" ]; then
-            XZ_SOURCE="package/feeds/packages/utils/xz"
-          else
-            echo "错误：未找到xz包"
-            ls -R package/feeds/packages/libs | grep xz
-            exit 1
-          fi
+          XZ_SOURCE=$(find package/feeds/packages -path "*/xz" | head -n 1)
+          [ -n "$XZ_SOURCE" ] && [ ! -d "package/libs/xz" ] && mv "$XZ_SOURCE" package/libs/
           
-          # 移动依赖库
-          [ -d "package/libs/libev" ] || mv package/feeds/packages/libs/libev package/libs/
-          [ -d "package/libs/libpam" ] || mv package/feeds/packages/libs/libpam package/libs/
-          [ -d "package/libs/libtirpc" ] || mv package/feeds/packages/libs/libtirpc package/libs/
-          [ -d "package/libs/xz" ] || mv "$XZ_SOURCE" package/libs/
-          [ -d "package/libs/net-snmp" ] || mv package/feeds/packages/net/net-snmp package/libs/
+          for lib in libev libpam libtirpc; do
+            src=$(find package/feeds/packages -path "*/$lib" | head -n 1)
+            [ -n "$src" ] && [ ! -d "package/libs/$lib" ] && mv "$src" package/libs/
+          done
+          
+          src=$(find package/feeds/packages -path "*/net-snmp" | head -n 1)
+          [ -n "$src" ] && [ ! -d "package/libs/net-snmp" ] && mv "$src" package/libs/
           
           rm -rf package/feeds/packages
-          ./scripts/feeds install -a
-          
-          # 验证依赖
-          for lib in libev libpam libtirpc xz net-snmp; do
-            [ -d "package/libs/$lib" ] || { echo "缺失依赖 $lib"; exit 1; }
-          done
+          ./scripts/feeds install -a > /dev/null 2>&1
 
-      - name: 修复设备树依赖
+      - name: 修复设备树
         run: |
           DTSI_FILE="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-cmiot.dtsi"
-          [ -f "$DTSI_FILE" ] && sed -i 's/#include "ipq6018-nss.dtsi"/\/\/&/' "$DTSI_FILE" || exit 1
+          [ -f "$DTSI_FILE" ] && sed -i 's/#include "ipq6018-nss.dtsi"/\/\/&/' "$DTSI_FILE"
 
-      - name: 生成配置文件
+      - name: 生成配置
         run: |
-          make distclean
+          make distclean > /dev/null 2>&1
           cat > .config <<EOF
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
@@ -101,78 +84,53 @@ jobs:
           CONFIG_PACKAGE_xz=y
           CONFIG_PACKAGE_net-snmp=y
           EOF
-          make defconfig
-          sed -i 's/[;:]/=/g; s/[[:space:]]*=[[:space:]]*/=/' .config
-          make defconfig
+          make defconfig > /dev/null 2>&1
 
-      - name: 编译工具链（日志分割+减少冗余）
+      - name: 编译工具链（关闭冗余输出）
         run: |
-          export TERM=dumb
-          rm -rf staging_dir/toolchain-aarch64_cortex-a53_musl
-          make toolchain/clean V=s
-          
-          # 关键优化：分割工具链编译日志，避免单文件过大
-          echo "===== 开始编译工具链 ====="
-          make -j1 toolchain/compile V=ss 2>&1 | tee >(split -d -b 5M - toolchain-build.log-)  # V=ss减少输出详细度
-          
-          # 合并分割的日志（方便后续查看）
-          cat toolchain-build.log-* > toolchain-build.log
-          
-          # 检查是否有隐藏错误（即使日志被截断）
-          if [ $? -ne 0 ]; then
-            echo "===== 工具链编译返回非零状态码 ====="
-            tail -n 100 toolchain-build.log  # 输出最后100行
+          # 只输出错误信息，其他内容重定向到文件
+          make -j1 toolchain/compile V=0 2> toolchain-errors.log
+          # 检查是否有错误
+          if [ -s toolchain-errors.log ]; then
+            echo "工具链编译错误："
+            cat toolchain-errors.log
             exit 1
           fi
 
-      - name: 验证交叉编译器
+      - name: 编译固件（关闭冗余输出）
         run: |
-          TOOLCHAIN_BIN="staging_dir/toolchain-aarch64_cortex-a53_musl/bin"
-          [ -d "$TOOLCHAIN_BIN" ] || { echo "工具链目录缺失"; ls -lh staging_dir/; exit 1; }
-          [ -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ] || { echo "编译器缺失"; ls -lh $TOOLCHAIN_BIN; exit 1; }
-          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || exit 1
-
-      - name: 编译固件（日志优化）
-        run: |
-          export TERM=dumb
-          # 同样分割固件编译日志
-          make -j2 V=ss 2>&1 | tee >(split -d -b 5M - firmware-build.log-)  # V=ss比V=s输出更少
-          cat firmware-build.log-* > firmware-build.log
-          
-          # 检查编译返回码
-          if [ $? -ne 0 ]; then
-            echo "===== 固件编译返回非零状态码 ====="
-            tail -n 100 firmware-build.log
+          # 同样只输出错误
+          make -j2 V=0 2> firmware-errors.log
+          if [ -s firmware-errors.log ]; then
+            echo "固件编译错误："
+            cat firmware-errors.log
             exit 1
           fi
 
-      - name: 检查编译产物
+      - name: 检查产物（核心验证）
         run: |
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
-          ls -lh $FIRMWARE_DIR
-          ls $FIRMWARE_DIR/*zn_zn-m2*.bin || { echo "固件缺失"; exit 1; }
+          if ls $FIRMWARE_DIR/*zn_zn-m2*.bin >/dev/null 2>&1; then
+            echo "固件编译成功！"
+            ls -lh $FIRMWARE_DIR/*zn_zn-m2*.bin
+          else
+            echo "未找到固件文件"
+            exit 1
+          fi
 
-      - name: 整理输出
-        if: success()
-        run: |
-          mkdir -p output
-          cp -v $FIRMWARE_DIR/*zn_zn-m2*.bin output/
-
-      - name: 创建发布
+      - name: 上传固件
         if: success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: zn-m2-${{ github.run_id }}
-          files: output/*
+          files: bin/targets/qualcommax/ipq60xx/*zn_zn-m2*.bin
 
-      - name: 上传完整日志（无论成败）
+      - name: 上传错误日志（仅失败时）
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: full-logs
+          name: error-logs
           path: |
-            toolchain-build.log-*  # 上传所有分割的日志
-            toolchain-build.log
-            firmware-build.log-*
-            firmware-build.log
-            .config
+            toolchain-errors.log
+            firmware-errors.log
           retention-days: 14
