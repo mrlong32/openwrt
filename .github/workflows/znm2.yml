@@ -33,117 +33,123 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 配置依赖（增强libaudit搜索）
+      - name: 配置依赖（添加额外源+手动克隆libaudit）
         run: |
-          # 重置feeds配置
+          # 关键修复：添加可能包含libaudit的security源
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
+          echo "src-git security https://git.openwrt.org/feed/security.git" >> feeds.conf.default  # 新增安全源
           
           ./scripts/feeds clean
-          ./scripts/feeds update -f -a
+          ./scripts/feeds update -f -a  # 更新包括新添加的security源
           
           # 仅删除冲突包
           rm -rf package/utils/audit
           
-          # 克隆完整的packages源（增加深度确保完整）
-          if [ ! -d "package/feeds/packages" ]; then
-            git clone --depth=10 https://git.openwrt.org/feed/packages.git package/feeds/packages || {
-              echo "错误：克隆packages源失败"
-              exit 1
-            }
-          fi
+          # 1. 尝试从所有已添加的源中搜索libaudit
+          echo "===== 从所有feed中搜索libaudit ====="
+          LIBAUDIT_SOURCE=$(find feeds/ -name "libaudit" -type d | head -n 1)
           
-          # 关键修复：全局搜索libaudit包（不局限于libs目录）
-          echo "===== 搜索libaudit源 ====="
-          LIBAUDIT_SOURCE=$(find package/feeds/packages -name "libaudit" -type d | head -n 1)
-          
+          # 2. 若feed中无结果，手动从上游仓库克隆
           if [ -z "$LIBAUDIT_SOURCE" ]; then
-            echo "错误：未找到libaudit源"
-            echo "===== 列出packages源中可能的相关目录 ====="
-            ls -lh package/feeds/packages/libs/ | grep -i audit
-            ls -lh package/feeds/packages/utils/ | grep -i audit
-            ls -lh package/feeds/packages/security/ | grep -i audit  # 新增可能的安全目录
-            exit 1
-          fi
-          
-          # 提取libaudit
-          if [ ! -d "package/libs/libaudit" ]; then
+            echo "未从feed找到libaudit，尝试手动克隆..."
+            if [ ! -d "package/libs/libaudit" ]; then
+              git clone --depth=1 https://github.com/openwrt/packages.git temp-packages || {
+                echo "手动克隆失败"
+                exit 1
+              }
+              # 从手动克隆的仓库中搜索
+              LIBAUDIT_SOURCE=$(find temp-packages -name "libaudit" -type d | head -n 1)
+              if [ -n "$LIBAUDIT_SOURCE" ]; then
+                mv "$LIBAUDIT_SOURCE" package/libs/
+                echo "手动提取libaudit成功（来源：$LIBAUDIT_SOURCE）"
+              else
+                echo "错误：所有来源均未找到libaudit"
+                exit 1
+              fi
+              rm -rf temp-packages
+            fi
+          else
+            # 从feed中提取
             mv "$LIBAUDIT_SOURCE" package/libs/
-            echo "成功提取libaudit（来源：$LIBAUDIT_SOURCE）"
+            echo "从feed提取libaudit成功（来源：$LIBAUDIT_SOURCE）"
           fi
           
-          # 搜索audit/host（解决build dependency）
-          echo "===== 搜索audit/host源 ====="
-          AUDIT_HOST_SOURCE=$(find package/feeds/packages -name "audit" -type d | head -n 1)
+          # 处理audit/host依赖（同样扩大搜索范围）
+          echo "===== 搜索audit/host ====="
+          AUDIT_HOST_SOURCE=$(find feeds/ -name "audit" -type d | head -n 1)
           
           if [ -z "$AUDIT_HOST_SOURCE" ]; then
-            echo "错误：未找到audit/host源"
-            ls -lh package/feeds/packages/utils/ | grep -i audit
-            exit 1
-          fi
-          
-          # 提取audit/host
-          if [ ! -d "package/utils/audit" ]; then
-            mv "$AUDIT_HOST_SOURCE" package/utils/
-            echo "成功提取audit/host（来源：$AUDIT_HOST_SOURCE）"
-          fi
-          
-          # 搜索libpci
-          LIBPCI_SOURCE=$(find package/feeds/packages -name "libpci" -type d | head -n 1)
-          if [ -z "$LIBPCI_SOURCE" ]; then
-            echo "错误：未找到libpci源"
-            ls -lh package/feeds/packages/libs/ | grep -i pci
-            exit 1
-          fi
-          [ ! -d "package/libs/libpci" ] && mv "$LIBPCI_SOURCE" package/libs/ && echo "成功提取libpci"
-          
-          # 搜索policycoreutils
-          POLICY_SOURCE=$(find package/feeds/packages -name "policycoreutils" -type d | head -n 1)
-          if [ -z "$POLICY_SOURCE" ]; then
-            echo "错误：未找到policycoreutils源"
-            ls -lh package/feeds/packages/utils/ | grep -i policy
-            exit 1
-          fi
-          [ ! -d "package/utils/policycoreutils" ] && mv "$POLICY_SOURCE" package/utils/ && echo "成功提取policycoreutils"
-          
-          # 提取其他依赖
-          for lib in libev libpam libtirpc xz; do
-            src=$(find package/feeds/packages -name "$lib" -type d | head -n 1)
-            if [ -z "$src" ]; then
-              echo "错误：未找到$lib源"
-              exit 1
+            echo "未从feed找到audit，尝试手动克隆..."
+            if [ ! -d "package/utils/audit" ]; then
+              git clone --depth=1 https://github.com/openwrt/packages.git temp-packages
+              AUDIT_HOST_SOURCE=$(find temp-packages -name "audit" -type d | head -n 1)
+              if [ -n "$AUDIT_HOST_SOURCE" ]; then
+                mv "$AUDIT_HOST_SOURCE" package/utils/
+                echo "手动提取audit成功"
+              else
+                echo "错误：未找到audit/host"
+                exit 1
+              fi
+              rm -rf temp-packages
             fi
-            [ ! -d "package/libs/$lib" ] && mv "$src" package/libs/ && echo "成功提取$lib"
+          else
+            mv "$AUDIT_HOST_SOURCE" package/utils/
+            echo "从feed提取audit成功"
+          fi
+          
+          # 搜索其他依赖（扩大范围到所有feed）
+          for pkg in libpci policycoreutils; do
+            echo "===== 搜索$pkg ====="
+            SRC=$(find feeds/ -name "$pkg" -type d | head -n 1)
+            if [ -z "$SRC" ]; then
+              echo "未从feed找到$pkg，尝试手动克隆..."
+              git clone --depth=1 https://github.com/openwrt/packages.git temp-packages
+              SRC=$(find temp-packages -name "$pkg" -type d | head -n 1)
+              if [ -n "$SRC" ]; then
+                dest="package/libs/$pkg"
+                [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
+                mv "$SRC" "$dest"
+                echo "手动提取$pkg成功"
+              else
+                echo "错误：未找到$pkg"
+                exit 1
+              fi
+              rm -rf temp-packages
+            else
+              dest="package/libs/$pkg"
+              [ "$pkg" = "policycoreutils" ] && dest="package/utils/$pkg"
+              mv "$SRC" "$dest"
+              echo "从feed提取$pkg成功"
+            fi
           done
           
-          # 提取net-snmp
-          NET_SNMP_SOURCE=$(find package/feeds/packages -name "net-snmp" -type d | head -n 1)
-          if [ -z "$NET_SNMP_SOURCE" ]; then
-            echo "错误：未找到net-snmp源"
-            exit 1
-          fi
-          [ ! -d "package/libs/net-snmp" ] && mv "$NET_SNMP_SOURCE" package/libs/ && echo "成功提取net-snmp"
+          # 提取其他基础依赖
+          for lib in libev libpam libtirpc xz net-snmp; do
+            SRC=$(find feeds/ -name "$lib" -type d | head -n 1)
+            if [ -z "$SRC" ]; then
+              echo "错误：未找到$lib"
+              exit 1
+            fi
+            [ ! -d "package/libs/$lib" ] && mv "$SRC" package/libs/ && echo "提取$lib成功"
+          done
           
-          # 清理临时文件
-          rm -rf package/feeds/packages
-          
-          # 强制安装依赖
+          # 强制安装所有依赖
           ./scripts/feeds install -a
-          ./scripts/feeds install -p packages libaudit audit libpci policycoreutils net-snmp
-          ./scripts/feeds install -p packages -f libaudit audit libpci policycoreutils
+          ./scripts/feeds install -p security libaudit  # 从security源安装（如果存在）
+          ./scripts/feeds install -p packages audit libpci policycoreutils
           
-          # 验证依赖
+          # 最终验证
           required_pkgs=(
             "package/libs/libaudit"
             "package/utils/audit"
             "package/libs/libpci"
             "package/utils/policycoreutils"
-            "package/libs/net-snmp"
           )
           for pkg in "${required_pkgs[@]}"; do
             if [ ! -d "$pkg" ]; then
-              echo "错误：依赖包 $pkg 仍缺失"
+              echo "错误：关键依赖 $pkg 仍缺失"
               exit 1
             fi
           done
