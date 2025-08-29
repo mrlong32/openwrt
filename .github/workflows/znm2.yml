@@ -38,7 +38,7 @@ jobs:
           
           df -h
 
-      - name: 配置feeds并手动添加缺失依赖库（增强xz路径探测）
+      - name: 配置feeds并手动添加缺失依赖库
         run: |
           # 仅保留官方源
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
@@ -52,12 +52,12 @@ jobs:
           rm -rf package/utils/audit package/utils/busybox package/boot/kexec-tools \
                  package/network/services/lldpd package/utils/policycoreutils
           
-          # 克隆完整的packages源（不使用depth=1，避免文件缺失）
+          # 克隆完整的packages源
           if [ ! -d "package/feeds/packages" ]; then
             git clone https://git.openwrt.org/feed/packages.git package/feeds/packages
           fi
           
-          # 探测xz包的实际路径（可能在libs或utils目录）
+          # 探测xz包的实际路径
           XZ_SOURCE=""
           if [ -d "package/feeds/packages/libs/xz" ]; then
             XZ_SOURCE="package/feeds/packages/libs/xz"
@@ -65,12 +65,12 @@ jobs:
             XZ_SOURCE="package/feeds/packages/utils/xz"
           else
             echo "错误：未找到xz包，请检查packages源"
-            ls -R package/feeds/packages/libs | grep xz  # 打印libs目录下的xz相关文件
-            ls -R package/feeds/packages/utils | grep xz # 打印utils目录下的xz相关文件
+            ls -R package/feeds/packages/libs | grep xz
+            ls -R package/feeds/packages/utils | grep xz
             exit 1
           fi
           
-          # 提取所需依赖库（带详细日志）
+          # 提取所需依赖库
           required_libs=()
           
           # libev
@@ -114,13 +114,13 @@ jobs:
           # 安装所有包
           ./scripts/feeds install -a
           
-          # 验证依赖库（更详细的检查）
+          # 验证依赖库
           missing_libs=()
           for lib in "libev" "libpam" "libtirpc" "xz" "net-snmp"; do
             if [ ! -d "package/libs/$lib" ]; then
               missing_libs+=($lib)
               echo "警告：未找到依赖库 $lib"
-              ls -lh package/libs/ | grep "$lib"  # 打印相关文件列表
+              ls -lh package/libs/ | grep "$lib"
             fi
           done
           
@@ -140,7 +140,7 @@ jobs:
             exit 1
           fi
 
-      - name: 生成并修复.config文件（针对3832行）
+      - name: 生成并修复.config文件
         run: |
           export TERM=dumb
           make distclean
@@ -160,49 +160,67 @@ jobs:
           
           make defconfig
           
-          # 修复3832行语法错误
-          ERROR_LINE=3832
-          echo "===== 第3832行及附近内容 ====="
-          sed -n "$((ERROR_LINE-5)),$((ERROR_LINE+5))p" .config | cat -n
-          
-          ERROR_CONTENT=$(sed -n "${ERROR_LINE}p" .config)
-          if echo "$ERROR_CONTENT" | grep -q '='; then
-            KEY=$(echo "$ERROR_CONTENT" | cut -d'=' -f1 | tr -cd 'a-zA-Z0-9_')
-            VALUE=$(echo "$ERROR_CONTENT" | cut -d'=' -f2- | tr -cd 'a-zA-Z0-9_= ')
-            sed -i "${ERROR_LINE}c${KEY}=${VALUE}" .config
-          else
-            sed -i "${ERROR_LINE}d" .config
-          fi
-          
+          # 修复配置文件语法错误
           sed -i 's/[;:]/=/g' .config
           sed -i 's/[[:space:]]*=[[:space:]]*/=/' .config
           make defconfig
-          
-          echo "===== 修复后第3832行内容 ====="
-          sed -n "${ERROR_LINE}p" .config
 
-      - name: 编译交叉工具链
+      - name: 编译交叉工具链（增强错误排查）
         run: |
           export TERM=dumb
+          # 彻底清理之前的工具链残留
           rm -rf staging_dir/toolchain-aarch64_cortex-a53_musl
           make toolchain/clean V=s
+          
+          # 单线程编译并保存详细日志
           make -j1 toolchain/compile V=s 2>&1 | tee toolchain-build.log
           
-          if grep -q "error:" toolchain-build.log; then
-            echo "工具链编译错误："
-            cat toolchain-build.log | grep -B 10 -A 10 "error:"
+          # 检查日志中的关键错误
+          if grep -q "error: unknown type name 'FILE'" toolchain-build.log; then
+            echo "错误：检测到stdio.h相关问题，可能缺少glibc-dev"
+            exit 1
+          elif grep -q "cannot find -lc" toolchain-build.log; then
+            echo "错误：缺少C标准库"
+            exit 1
+          elif grep -q "configure: error" toolchain-build.log; then
+            echo "错误：工具链配置失败"
+            cat toolchain-build.log | grep "configure: error" -B 10 -A 10
+            exit 1
+          fi
+          
+          # 验证工具链目录是否存在
+          if [ ! -d "staging_dir/toolchain-aarch64_cortex-a53_musl" ]; then
+            echo "错误：工具链目录未生成"
+            ls -lh staging_dir/ || true
             exit 1
           fi
 
-      - name: 验证交叉编译器
+      - name: 验证交叉编译器（增强检查）
         run: |
           TOOLCHAIN_BIN="staging_dir/toolchain-aarch64_cortex-a53_musl/bin"
+          
+          # 检查工具链二进制目录是否存在
+          if [ ! -d "$TOOLCHAIN_BIN" ]; then
+            echo "错误：工具链二进制目录不存在"
+            echo "工具链根目录内容："
+            ls -lh staging_dir/toolchain-aarch64_cortex-a53_musl/ || true
+            exit 1
+          fi
+          
+          # 检查编译器是否存在
           if [ ! -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ]; then
             echo "错误：交叉编译器未生成"
+            echo "工具链二进制目录内容："
             ls -lh $TOOLCHAIN_BIN || true
             exit 1
           fi
-          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || exit 1
+          
+          # 验证编译器可执行性
+          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || {
+            echo "错误：交叉编译器无法运行"
+            file $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc || true
+            exit 1
+          }
 
       - name: 编译固件
         run: |
