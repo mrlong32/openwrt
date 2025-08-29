@@ -25,12 +25,10 @@ jobs:
 
       - name: 清理系统空间并安装核心依赖
         run: |
-          # 清理系统垃圾
           sudo apt autoremove -y
           sudo apt clean
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           
-          # 安装基础编译工具和32位库
           sudo apt update -y
           sudo apt install -y \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
@@ -38,28 +36,28 @@ jobs:
             libelf-dev libtool-bin autoconf automake squashfs-tools m4 ncurses-term \
             lib32z1 lib32stdc++6 libc6-i386
           
-          # 显示磁盘空间和已安装的关键库版本
           df -h
           dpkg -l | grep -E "gcc|g\+\+|lib32z1|libstdc\+\+"
 
-      - name: 配置feeds并处理依赖
+      - name: 配置feeds并强制清理冲突包
         run: |
-          # 确保只使用官方源
+          # 仅保留官方源，确保依赖库可获取
           echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf.default
           echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
           echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
-          echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf.default
+          # 注释telephony源（若不需要且导致问题）
+          # echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf.default
           
-          # 清理并更新feeds
           ./scripts/feeds clean
           ./scripts/feeds update -f -a
           
-          # 安装必要的基础包及缺失的依赖库
+          # 安装基础包并优先处理依赖库
           ./scripts/feeds install -a
-          # 手动安装缺失的依赖（解决WARNING中提到的依赖问题）
-          ./scripts/feeds install libev libpam libtirpc liblzma libnetsnmp
+          # 强制安装可能缺失的依赖（指定官方packages源）
+          ./scripts/feeds install -p packages libev libpam libtirpc liblzma libnetsnmp
           
-          # 卸载可能冲突的包
+          # 卸载明确冲突的包（避免依赖链错误）
+          ./scripts/feeds uninstall audit busybox kexec-tools lldpd policycoreutils
           ./scripts/feeds uninstall domoticz i2pd kea libtorrent-rasterbar
 
       - name: 修复设备树依赖
@@ -73,39 +71,51 @@ jobs:
             exit 1
           fi
 
-      - name: 彻底清理并生成配置（修复.config语法错误）
+      - name: 生成并修复.config文件（核心修复步骤）
         run: |
           export TERM=dumb
           make distclean
           
-          # 生成默认配置
+          # 生成默认配置（避免手动追加导致的语法错误）
           make defconfig IGNORE_ERRORS=1
           
-          # 确保.config格式正确（使用echo追加时避免语法错误）
+          # 关键：使用sed而非echo追加配置，避免格式错误
           # 启用无线固件包
+          sed -i '/CONFIG_PACKAGE_ath11k-firmware-ipq6018/d' .config
           echo "CONFIG_PACKAGE_ath11k-firmware-ipq6018=y" >> .config
-          # 禁用第三方插件（严格使用"is not set"语法）
-          echo "CONFIG_PACKAGE_chinadns-ng is not set" >> .config
-          echo "CONFIG_PACKAGE_sing-box is not set" >> .config
-          echo "CONFIG_PACKAGE_luci-theme-argon is not set" >> .config
           
-          # 重新生成配置以自动修复语法错误
+          # 禁用第三方插件和冲突包
+          for pkg in chinadns-ng sing-box luci-theme-argon audit busybox kexec-tools lldpd policycoreutils; do
+            sed -i "/CONFIG_PACKAGE_$pkg/d" .config
+            echo "CONFIG_PACKAGE_$pkg is not set" >> .config
+          done
+          
+          # 重新生成配置，自动修复依赖和语法
           make defconfig
           
-          # 验证配置文件是否存在且无语法错误
+          # 验证并修复3840行附近的语法错误（关键步骤）
+          echo "检查.config第3840行附近内容："
+          sed -n '3835,3845p' .config  # 打印错误行附近内容
+          
+          # 修复常见语法错误（如冒号替换为等号，移除无效字符）
+          sed -i 's/:/=/g' .config  # 将冒号替换为等号（解决missing separator）
+          sed -i '/^[^#]*[^= ]*$/d' .config  # 删除无等号的无效行
+          
+          # 再次生成配置确保格式正确
+          make defconfig
+          
+          # 最终验证
           if [ ! -f ".config" ]; then
             echo "错误：.config文件生成失败"
             exit 1
           fi
-          # 检查配置文件中的语法错误（查找可能的缺失分隔符）
           if grep -n -E '^[^#]+:[^=]+$' .config; then
-            echo "错误：.config文件存在语法错误（缺失分隔符）"
+            echo "错误：.config仍存在语法错误"
             exit 1
           fi
-          # 验证关键配置项
-          cat .config | grep -E "ath11k-firmware-ipq6018|chinadns-ng|sing-box"
+          cat .config | grep -E "ath11k-firmware-ipq6018|chinadns-ng|sing-box|audit|busybox"
 
-      - name: 编译交叉工具链（单线程模式）
+      - name: 编译交叉工具链
         run: |
           export TERM=dumb
           rm -rf staging_dir/toolchain-aarch64_cortex-a53_musl
@@ -121,18 +131,12 @@ jobs:
       - name: 验证交叉编译器
         run: |
           TOOLCHAIN_BIN="staging_dir/toolchain-aarch64_cortex-a53_musl/bin"
-          if [ ! -d "$TOOLCHAIN_BIN" ]; then
-            echo "工具链目录不存在：$TOOLCHAIN_BIN"
+          if [ ! -d "$TOOLCHAIN_BIN" ] || [ ! -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ]; then
+            echo "错误：交叉编译器未生成"
+            ls -lh $TOOLCHAIN_BIN || true
             exit 1
           fi
-          if [ ! -f "$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc" ]; then
-            echo "交叉编译器未生成：$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc"
-            exit 1
-          fi
-          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || {
-            echo "交叉编译器无法运行"
-            exit 1
-          }
+          $TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc --version || exit 1
 
       - name: 编译固件
         run: |
@@ -142,9 +146,7 @@ jobs:
       - name: 检查编译产物
         run: |
           FIRMWARE_DIR="bin/targets/qualcommax/ipq60xx"
-          echo "固件目录内容："
           ls -lh $FIRMWARE_DIR
-          
           if ! ls $FIRMWARE_DIR/*zn_zn-m2*.bin >/dev/null 2>&1; then
             echo "未找到ZN-M2固件文件"
             exit 1
