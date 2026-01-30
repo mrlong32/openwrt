@@ -21,7 +21,7 @@ env:
   SUBTARGET: generic
   DEVICE: csac_qca9563-csac
   # 使用 25.12 分支
-  BRANCH: openwrt-25.12
+  BRANCH: main
 
 jobs:
   build:
