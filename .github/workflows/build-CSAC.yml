@@ -1,0 +1,180 @@
+name: Build OpenWrt 25.12
+
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      build_options:
+        description: '额外编译选项 (可选)'
+        required: false
+        default: ''
+  # 当推送到 main 或 master 分支时触发
+  push:
+    branches: [ "main", "master" ]
+  # 定时触发，每周一凌晨2点
+  schedule:
+    - cron: '0 2 * * 1'
+
+env:
+  # 设置编译环境变量
+  TARGET: ath79
+  SUBTARGET: generic
+  DEVICE: csac_qca9563-csac
+  # 使用 25.12 分支
+  BRANCH: openwrt-25.12
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    strategy:
+      matrix:
+        # 可以同时编译多个镜像类型
+        image_type: [squashfs]
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        ref: ${{ env.BRANCH }}
+
+    - name: 设置编译环境
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          ccache \
+          ecj \
+          fastjar \
+          file \
+          g++ \
+          gawk \
+          gettext \
+          git \
+          java-propose-classpath \
+          libelf-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libssl-dev \
+          python3 \
+          python3-distutils \
+          python3-setuptools \
+          python3-pip \
+          python3-pyelftools \
+          unzip \
+          wget \
+          rsync \
+          time \
+          xsltproc \
+          zlib1g-dev \
+          subversion \
+          gperf \
+          bison \
+          flex \
+          asciidoc \
+          bash \
+          bc \
+          binutils \
+          bzip2 \
+          diffutils \
+          findutils \
+          gawk \
+          gcc-8 \
+          g++-8 \
+          libc6-dev \
+          libtool \
+          make \
+          patch \
+          perl \
+          ruby \
+          sed \
+          tar \
+          unzip \
+          xmlto \
+          xxd \
+          zlib1g-dev
+
+    - name: 配置编译参数
+      run: |
+        # 如果存在 seed.config 则使用，否则使用默认配置
+        if [ -f "seed.config" ]; then
+          echo "使用自定义的 seed.config 配置文件"
+          cp seed.config .config
+        else
+          echo "seed.config 不存在，使用默认配置"
+          # 设置基本配置
+          echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
+        fi
+
+        # 如果需要添加额外选项
+        if [ -n "${{ github.event.inputs.build_options }}" ]; then
+          echo "${{ github.event.inputs.build_options }}" >> .config
+        fi
+
+    - name: 下载 feeds
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: 配置编译选项
+      run: |
+        # 使用 menuconfig 进行最终配置（可选）
+        # 如果需要交互式配置，可以取消注释下一行
+        # make menuconfig
+        # 或者使用旧配置
+        make defconfig
+        make -j$(nproc) prereq
+        make -j$(nproc) package/compile
+
+    - name: 开始编译
+      run: |
+        # 开始正式编译
+        echo "开始编译 ${{ env.DEVICE }}..."
+        time make -j$(($(nproc)+1)) V=s 2>&1 | tee build.log
+
+    - name: 检查编译结果
+      run: |
+        # 检查固件是否生成
+        BIN_DIR="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
+        if [ -d "$BIN_DIR" ]; then
+          echo "编译成功！生成的固件文件："
+          find "$BIN_DIR" -name "*.bin" -o -name "*.img" -o -name "*.gz" | while read file; do
+            echo "- $(basename "$file")"
+            ls -lh "$file"
+          done
+        else
+          echo "错误：编译失败，$BIN_DIR 目录不存在"
+          exit 1
+        fi
+
+    - name: 上传固件制品
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-${{ env.DEVICE }}-${{ github.sha }}-${{ matrix.image_type }}
+        path: bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/
+        retention-days: 7
+
+    - name: 上传编译日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log-${{ github.sha }}
+        path: |
+          build.log
+          .config
+        retention-days: 7
+
+    - name: 通知结果
+      if: always()
+      run: |
+        if [ -d "bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}" ]; then
+          echo "✅ 编译成功！"
+          echo "可以在 Artifacts 中找到编译好的固件。"
+        else
+          echo "❌ 编译失败！"
+          echo "请检查 build.log 文件中的错误信息。"
+          exit 1
+        fi
