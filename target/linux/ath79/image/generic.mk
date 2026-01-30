@@ -3467,18 +3467,56 @@ define Device/zyxel_nbg6616
 endef
 TARGET_DEVICES += zyxel_nbg6616
 
-# 在文件的合适位置（例如其他类似设备附近）添加以下定义
 define Device/csac_qca9563-csac
-  $(Device/generic)
-  DEVICE_VENDOR := CSAC
-  DEVICE_MODEL := Router
-  DEVICE_VARIANT := QCA9563+QCA8337+QCA9886
-  SOC := qca9563
-  DEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca9886-ct
-  # 如果使用标准驱动，改为 kmod-ath10k ath10k-firmware-qca9886
-  IMAGE_SIZE := 16000k
-  SUPPORTED_DEVICES += csac,qca9563-csac
-  DEVICE_DTS := qca9563_csac
-  DEVICE_DTS_CONFIG := config@1
+ $(call Device/generic)
+ SOC := qca9563
+ DEVICE_VENDOR := CSAC
+ DEVICE_MODEL := Router
+ DEVICE_VARIANT := QCA9563+QCA8337+QCA9886
+ DEVICE_PACKAGES := \
+ kmod-ath10k-ct \
+ ath10k-firmware-qca9886-ct \
+ kmod-gpio-beeper
+
+ # **U-BOOT 关键配置**
+ KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -M 0x8006000
+ KERNEL_LOADADDR := 0x8006000
+ KERNEL_ENTRY_POINT := 0x8006000
+
+ IMAGES := factory.bin sysupgrade.bin
+
+ # **工厂镜像构建逻辑**
+ define Image/Build/factory
+ $(call prepare_generic_squashfs,factory)
+ $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
+ # 填充镜像至 Bootloader 要求的长度（长度由硬件手册指定）
+ $(STAGING_DIR_HOST)/bin/pad-to $$(( $(CONFIG_TARGET_ATH79_KERNEL_LEN) )) \
+ $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
+ # 可选：追加分区表（示例为 GPT 分区）
+ $(STAGING_DIR_HOST)/bin/dd if=$(STAGING_DIR_HOST)/share/u-boot/mkimage/gpt.img \
+ of=$(BIN_DIR)/$(IMG_PREFIX)-factory.bin bs=512 seek=1 conv=notrunc
+ endef
+
+ # **在线升级镜像构建逻辑**
+ define Image/Build/sysupgrade
+ $(call prepare_generic_squashfs,sysupgrade)
+ $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
+ $(STAGING_DIR_HOST)/bin/pad-to $$(( $(CONFIG_TARGET_ATH79_KERNEL_LEN) )) \
+ $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
+ endef
+
+ # **重写内核编译流程**
+ define Kernel/Compile
+ $(KERNEL_MAKE) \
+ KERNEL_BIN=$(BIN_DIR)/uImage \
+ LOADADDR=$(KERNEL_LOADADDR) \
+ ENTRY=$(KERNEL_ENTRY_POINT)
+ endef
+
+ # **设备树支持**
+ DEVICE_DTS := qca9563_csac
+ DEVICE_DTS_CONFIG := config@1
+ SUPPORTED_DEVICES += csac,qca9563-csac
 endef
+
 TARGET_DEVICES += csac_qca9563-csac
