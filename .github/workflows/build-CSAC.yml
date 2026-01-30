@@ -1,35 +1,29 @@
 name: Build OpenWrt 25.12
 
 on:
-  # 手动触发
   workflow_dispatch:
     inputs:
       build_options:
         description: '额外编译选项 (可选)'
         required: false
         default: ''
-  # 当推送到 main 或 master 分支时触发
   push:
-    branches: [ "main", "master" ]
-  # 定时触发，每周一凌晨2点
+    branches: ["main", "master"]
   schedule:
     - cron: '0 2 * * 1'
 
 env:
-  # 设置编译环境变量
   TARGET: ath79
   SUBTARGET: generic
   DEVICE: csac_qca9563-csac
-  # 使用 25.12 分支
   BRANCH: main
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 300
     strategy:
       matrix:
-        # 可以同时编译多个镜像类型
         image_type: [squashfs]
 
     steps:
@@ -39,10 +33,24 @@ jobs:
         submodules: recursive
         ref: ${{ env.BRANCH }}
 
+    - name: 验证设备树文件
+      id: verify_dts
+      run: |
+        echo "检查设备树文件..."
+        if [ -f "target/linux/ath79/dts/qca9563_csac.dts" ]; then
+          echo "✅ 找到设备树文件: qca9563_csac.dts"
+          echo "dts_valid=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ 错误: 未找到设备树文件 qca9563_csac.dts"
+          echo "请确保在 target/linux/ath79/dts/ 目录下有该文件"
+          ls -la target/linux/ath79/dts/ || echo "设备树目录不存在"
+          exit 1
+        fi
+
     - name: 设置编译环境
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
           build-essential \
           ccache \
           ecj \
@@ -79,9 +87,6 @@ jobs:
           bzip2 \
           diffutils \
           findutils \
-          gawk \
-          gcc-8 \
-          g++-8 \
           libc6-dev \
           libtool \
           make \
@@ -90,10 +95,10 @@ jobs:
           ruby \
           sed \
           tar \
-          unzip \
           xmlto \
           xxd \
-          zlib1g-dev
+          cmake \
+          pkg-config
 
     - name: 配置编译参数
       run: |
@@ -109,6 +114,9 @@ jobs:
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
         fi
 
+        # 强制启用设备树覆盖
+        echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
+        
         # 如果需要添加额外选项
         if [ -n "${{ github.event.inputs.build_options }}" ]; then
           echo "${{ github.event.inputs.build_options }}" >> .config
@@ -121,13 +129,9 @@ jobs:
 
     - name: 配置编译选项
       run: |
-        # 使用 menuconfig 进行最终配置（可选）
-        # 如果需要交互式配置，可以取消注释下一行
-        # make menuconfig
-        # 或者使用旧配置
+        # 使用现有配置
         make defconfig
-        make -j$(nproc) prereq
-        make -j$(nproc) package/compile
+        echo "配置完成，开始编译..."
 
     - name: 开始编译
       run: |
@@ -140,13 +144,16 @@ jobs:
         # 检查固件是否生成
         BIN_DIR="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
         if [ -d "$BIN_DIR" ]; then
-          echo "编译成功！生成的固件文件："
+          echo "✅ 编译成功！生成的固件文件："
           find "$BIN_DIR" -name "*.bin" -o -name "*.img" -o -name "*.gz" | while read file; do
             echo "- $(basename "$file")"
             ls -lh "$file"
           done
         else
-          echo "错误：编译失败，$BIN_DIR 目录不存在"
+          echo "❌ 错误：编译失败，$BIN_DIR 目录不存在"
+          # 显示编译日志的最后100行以帮助调试
+          echo "显示编译日志的最后100行："
+          tail -100 build.log
           exit 1
         fi
 
