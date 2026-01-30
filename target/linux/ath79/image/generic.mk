@@ -3476,46 +3476,38 @@ define Device/csac_qca9563-csac
  DEVICE_PACKAGES := \
  kmod-ath10k-ct \
  ath10k-firmware-qca9886-ct \
- kmod-gpio-beeper
+ kmod-gpio-beeper # 仅保留必要模块
 
- # **U-BOOT 关键配置**
  KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -M 0x8006000
  KERNEL_LOADADDR := 0x8006000
  KERNEL_ENTRY_POINT := 0x8006000
 
  IMAGES := factory.bin sysupgrade.bin
 
- # **工厂镜像构建逻辑**
+ # 修正镜像填充大小
  define Image/Build/factory
  $(call prepare_generic_squashfs,factory)
  $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
- # 填充镜像至 Bootloader 要求的长度（长度由硬件手册指定）
- $(STAGING_DIR_HOST)/bin/pad-to $$(( $(CONFIG_TARGET_ATH79_KERNEL_LEN) )) \
+ $(STAGING_DIR_HOST)/bin/pad-to $$(( 8 * 1024 * 1024 )) \
  $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
- # 可选：追加分区表（示例为 GPT 分区）
- $(STAGING_DIR_HOST)/bin/dd if=$(STAGING_DIR_HOST)/share/u-boot/mkimage/gpt.img \
- of=$(BIN_DIR)/$(IMG_PREFIX)-factory.bin bs=512 seek=1 conv=notrunc
  endef
 
- # **在线升级镜像构建逻辑**
  define Image/Build/sysupgrade
  $(call prepare_generic_squashfs,sysupgrade)
  $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
- $(STAGING_DIR_HOST)/bin/pad-to $$(( $(CONFIG_TARGET_ATH79_KERNEL_LEN) )) \
+ $(STAGING_DIR_HOST)/bin/pad-to $$(( 8 * 1024 * 1024 )) \
  $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
  endef
 
- # **重写内核编译流程**
- define Kernel/Compile
- $(KERNEL_MAKE) \
- KERNEL_BIN=$(BIN_DIR)/uImage \
- LOADADDR=$(KERNEL_LOADADDR) \
- ENTRY=$(KERNEL_ENTRY_POINT)
- endef
-
- # **设备树支持**
+ # 修正设备树配置
  DEVICE_DTS := qca9563_csac
- DEVICE_DTS_CONFIG := config@1
+ DEVICE_DTS_CONFIG := config@0
+
+ # 注释掉无效签名
+ # define Image/Build/sign
+ # ...
+ # endef
+
  SUPPORTED_DEVICES += csac,qca9563-csac
 endef
 
