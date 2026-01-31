@@ -28,7 +28,18 @@ jobs:
         sudo timedatectl set-timezone "Asia/Shanghai"
     - name: 配置编译选项
       run: |
-        cp .config .config.backup
+        # 检查.config是否存在
+if [ ! -f .config ]; then
+  echo "⚠️  .config文件不存在，尝试从.sample恢复"
+  if [ -f .config.csac.sample ]; then
+    cp .config.csac.sample .config
+    echo "✅ 从.config.csac.sample恢复.config"
+  else
+    echo "❌ .config和.sample文件都不存在，使用defconfig"
+    make defconfig
+  fi
+fi
+cp .config .config.backup
         make defconfig
         make download -j$(nproc)
         find dl -size -1024c -exec ls -l {} \;
