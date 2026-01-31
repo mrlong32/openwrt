@@ -17,3 +17,7 @@ DEFAULT_PACKAGES += \
 	kmod-ath9k uboot-envtools
 
 $(eval $(call BuildTarget))
+
+
+# Register CSAC device
+TARGET_DEVICES += csac-csac-router

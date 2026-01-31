@@ -8,6 +8,10 @@
 / {
 	compatible = "csac,csac-router", "qca,qca9563";
 	model = "CSAC Router";
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x8000000>; /* 128MB */
+	};
 	aliases {
 		led-boot = &led_power;
 		led-failsafe = &led_power;
