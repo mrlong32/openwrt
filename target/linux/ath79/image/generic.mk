@@ -3468,36 +3468,45 @@ endef
 TARGET_DEVICES += zyxel_nbg6616
 
 define Device/csac_qca9563-csac
-  # 基础配置：使用ath79通用设备模板（兼容QCA9563）
+  # 基础模板：ath79 通用模板 + initramfs 支持
   $(call Device/generic)
-  $(call Device/uImage-lzma)  # 标准LZMA压缩的uImage模板
-  $(call Device/squashfs)     # 标准squashfs根文件系统模板
+  $(call Device/uImage-lzma)
+  $(call Device/squashfs)
+  $(call Device/initramfs)  # 关键：添加 initramfs 模板，恢复 initramfs-kernel.bin
 
-  # 核心参数（必须）
+  # 核心设备参数
   SOC := qca9563
   DEVICE_VENDOR := CSAC
   DEVICE_MODEL := Router
   DEVICE_VARIANT := QCA9563+QCA8337+QCA9886
-  DEVICE_DTS := qca9563_csac  # 你的设备树文件名（无需CONFIG）
+  DEVICE_DTS := qca9563_csac
   SUPPORTED_DEVICES += csac,qca9563-csac
 
-  # 闪存大小：8MB设备设为7808k（8*1024 - 256 = 7808，预留256KB给固件头）
+  # 8MB 闪存适配（必须，解决镜像过大报错）
   IMAGE_SIZE := 7808k
 
-  # 必要驱动包（保留你需要的）
+  # 必要驱动包（保留你的需求）
   DEVICE_PACKAGES := \
     kmod-ath10k-ct \
     ath10k-firmware-qca9886-ct \
     kmod-gpio-beeper
 
-  # 内核构建：ath79/QCA9563标准参数（加载地址0x8006000是对的）
-  KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -A mips -O linux -T 0x8006000 -C none
+  # ath79/QCA9563 标准内核参数（兼容 initramfs）
+  KERNEL := kernel-bin | append-dtb | lzma
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | uImage lzma -A mips -O linux -T 0x8006000
+  KERNEL_LOADADDR := 0x8006000
+  KERNEL_ENTRY_POINT := 0x8006000
 
-  # 标准镜像构建逻辑（合并内核+根文件系统，避免文件缺失）
-  IMAGES := factory.bin sysupgrade.bin
-  # factory.bin构建：标准模板+填充到指定大小
+  # 镜像列表：同时包含 initramfs/factory/sysupgrade
+  IMAGES := initramfs-kernel.bin factory.bin sysupgrade.bin
+
+  # initramfs 构建逻辑（ath79 标准模板，恢复该文件）
+  IMAGE/initramfs-kernel.bin := $$(KERNEL_INITRAMFS) | append-initramfs | check-size
+
+  # factory.bin 构建（标准逻辑，合并内核+根文件系统）
   IMAGE/factory.bin := append-kernel | pad-to $$$$(BLOCKSIZE) | append-rootfs | pad-rootfs | check-size $$$$(IMAGE_SIZE)
-  # sysupgrade.bin构建：兼容OpenWrt升级逻辑
+
+  # sysupgrade.bin 构建（兼容 OpenWrt 升级，加元数据）
   IMAGE/sysupgrade.bin := $$(IMAGE/factory.bin) | append-metadata | check-size $$$$(IMAGE_SIZE)
 endef
 
