@@ -128,6 +128,9 @@ define Device/csac-csac-router
   DEVICE_VENDOR := CSAC
   DEVICE_MODEL := Router
   DEVICE_PACKAGES := \
+    kmod-ath10k ath10k-firmware-qca9886 \
+    luci luci-theme-bootstrap \
+    swconfig iw hostapd
     kmod-usb2 kmod-usb-ohci kmod-usb-ledtrig-usbport \
     kmod-ath10k-ct ath10k-firmware-qca9886-ct \
     luci luci-ssl-openssl \
