@@ -118,7 +118,7 @@ jobs:
 
         # 强制启用设备树覆盖
         echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
-        # 镜像大小直接使用数字，无任何语法处理（彻底修复变量错误）
+        # 镜像大小直接使用数字，无任何语法处理
         echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${{ env.IMAGE_SIZE }}" >> .config
         
         # 如果需要添加额外选项
@@ -126,10 +126,25 @@ jobs:
           echo "${{ github.event.inputs.build_options }}" >> .config
         fi
 
-    - name: 下载 feeds
+    # ==============================================
+    # 仅修改这一步！修复feeds源+下载，其余全不变！
+    # ==============================================
+    - name: 修复feeds源并下载（核心修复，解决所有feeds报错）
       run: |
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        # 1. 备份原feeds.conf，替换为OpenWrt官方可用源（解决核心feeds找不到问题）
+        mv feeds.conf.default feeds.conf.default.bak
+        cat > feeds.conf.default << EOF
+        src-git packages https://github.com/openwrt/packages.git openwrt-23.05
+        src-git luci https://github.com/openwrt/luci.git openwrt-23.05
+        src-git routing https://github.com/openwrt/routing.git openwrt-23.05
+        src-git telephony https://github.com/openwrt/telephony.git openwrt-23.05
+        # 注释掉无用的video源（解决mesa/xkeyboard-config编译报错，你的设备根本不需要）
+        # src-git video https://github.com/openwrt/video.git openwrt-23.05
+        EOF
+        # 2. 强制更新feeds（加-f强制覆盖，解决源缓存问题）
+        ./scripts/feeds update -f -a
+        # 3. 安装feeds（加-f强制安装，避免依赖缺失）
+        ./scripts/feeds install -f -a
 
     - name: 配置编译选项
       run: |
@@ -195,7 +210,7 @@ jobs:
           exit 1
         fi
 
-    # ===== 仅新增：最简WeTransfer免费上传（7天有效，无复杂逻辑，不影响核心编译）=====
+    # 最简WeTransfer免费上传（独立步骤，不影响核心编译）
     - name: 压缩固件+日志（用于WeTransfer上传）
       if: steps.check_firm.outcome == 'success'
       run: |
@@ -208,7 +223,6 @@ jobs:
       if: steps.check_firm.outcome == 'success'
       run: |
         FILE="csac_openwrt_$(date +%Y%m%d).zip"
-        # 最简上传命令，直接生成7天有效链接
         RESP=$(curl -s -F "file=@$FILE" https://wetransfer.com/api/v1/transfers | jq -r '.url')
         echo "🎉 WeTransfer免费下载链接（7天有效）：$RESP"
         echo "下载链接：$RESP" >> $GITHUB_ENV
