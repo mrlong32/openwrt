@@ -3493,7 +3493,10 @@ define Device/csac_qca9563-csac
 
   # ath79/QCA9563 标准内核参数（兼容 initramfs）
   KERNEL := kernel-bin | append-dtb | lzma
-  KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | uImage lzma -A mips -O linux -T 0x8006000
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | \
+      mkimage -A mips -O linux -T kernel -C lzma \
+      -a 0x8006000 -e 0x8006000 \
+      -n 'MIPS OpenWrt Linux-6.12.66' -d -
   KERNEL_LOADADDR := 0x8006000
   KERNEL_ENTRY_POINT := 0x8006000
 
