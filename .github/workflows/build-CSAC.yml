@@ -17,7 +17,7 @@ env:
   SUBTARGET: generic
   DEVICE: csac_qca9563-csac
   BRANCH: main
-  IMAGE_SIZE: 7808k  # 8MB闪存适配，保留k后缀，后续在Shell中处理
+  IMAGE_SIZE: 7808k
 
 jobs:
   build:
@@ -37,14 +37,12 @@ jobs:
     - name: 验证设备树文件
       id: verify_dts
       run: |
-        echo "检查设备树文件..."
         DTS_PATH="target/linux/ath79/dts/qca9563_csac.dts"
         if [ -f "$DTS_PATH" ]; then
           echo "✅ 找到设备树文件: $DTS_PATH"
           echo "dts_valid=true" >> $GITHUB_OUTPUT
         else
           echo "❌ 未找到设备树文件 $DTS_PATH"
-          ls -la target/linux/ath79/dts/ || exit 1
           exit 1
         fi
 
@@ -58,30 +56,21 @@ jobs:
           python3-pyelftools unzip wget rsync time xsltproc zlib1g-dev \
           subversion gperf bison flex asciidoc bash bc binutils bzip2 \
           diffutils findutils libc6-dev libtool make patch perl ruby sed \
-          tar xmlto xxd cmake pkg-config zip unzip
+          tar xmlto xxd cmake pkg-config zip unzip jq
 
-    - name: 配置编译参数（处理镜像大小变量）
+    - name: 配置编译参数
       run: |
-        # 1. 处理IMAGE_SIZE，去掉末尾的k，得到数字
         ROOTFS_SIZE="${{ env.IMAGE_SIZE }}"
         ROOTFS_SIZE="${ROOTFS_SIZE%k}"
-        
-        # 2. 加载配置
         if [ -f "seed.config" ]; then
-          echo "使用自定义seed.config"
           cp seed.config .config
         else
-          echo "使用默认配置"
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
         fi
-        
-        # 3. 追加必要配置
         echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
         echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${ROOTFS_SIZE}" >> .config
-        
-        # 4. 追加额外选项
         if [ -n "${{ github.event.inputs.build_options }}" ]; then
           echo "${{ github.event.inputs.build_options }}" >> .config
         fi
@@ -109,39 +98,49 @@ jobs:
       id: check_firm
       run: |
         BIN_DIR="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
-        # 查找固件目录
         if [ ! -d "$BIN_DIR" ] || [ -z "$(find $BIN_DIR -name "*.bin")" ]; then
           BIN_DIR=$(find build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp -name "*.bin" | xargs -n1 dirname | head -1)
           if [ -z "$BIN_DIR" ]; then
-            echo "❌ 未找到固件，打印日志..."
+            echo "❌ 未找到固件"
             tail -200 build.log
             exit 1
           fi
         fi
-        echo "✅ 固件目录: $BIN_DIR"
         echo "FIRMWARE_DIR=$BIN_DIR" >> $GITHUB_ENV
 
-    - name: 上传固件到WeTransfer（7天有效）
+    - name: 压缩固件和日志
       if: steps.check_firm.outcome == 'success'
-      uses: kittinan/transfer-we@v1
-      with:
-        filename: ${{ env.FIRMWARE_DIR }}
-        title: "CSAC-OpenWrt固件"
+      run: |
+        mkdir -p upload
+        cp -r ${{ env.FIRMWARE_DIR }}/* upload/
+        cp build.log .config upload/
+        zip -r csac-openwrt.zip upload/
 
-    - name: 上传编译日志
+    - name: 上传到WeTransfer（7天有效）
+      if: steps.check_firm.outcome == 'success'
+      run: |
+        # 初始化上传
+        RESPONSE=$(curl -s -X POST "https://wetransfer.com/api/v4/transfers" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "CSAC-OpenWrt固件",
+            "description": "CSAC设备OpenWrt固件",
+            "expires_at": "'$(date -d "+7 days" -Iseconds | sed 's/+00:00/Z/')'",
+            "files": []
+          }')
+        TRANSFER_ID=$(echo "$RESPONSE" | jq -r '.id')
+        UPLOAD_URL=$(echo "$RESPONSE" | jq -r '.upload_url')
+        # 上传压缩包
+        curl -s -X PUT "$UPLOAD_URL" \
+          -H "Content-Type: application/zip" \
+          --data-binary @"csac-openwrt.zip"
+        # 输出下载链接
+        echo "✅ WeTransfer下载链接（7天有效）: https://wetransfer.com/$TRANSFER_ID"
+
+    - name: 上传日志到Artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: build-log
         path: build.log
         retention-days: 7
-
-    - name: 输出结果
-      if: always()
-      run: |
-        if [ -n "${{ env.FIRMWARE_DIR }}" ]; then
-          echo "✅ 编译成功！WeTransfer链接见上方步骤"
-        else
-          echo "❌ 编译失败，请查看日志"
-          exit 1
-        fi
