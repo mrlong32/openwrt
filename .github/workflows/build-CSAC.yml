@@ -17,7 +17,7 @@ env:
   SUBTARGET: generic
   DEVICE: csac_qca9563-csac
   BRANCH: main
-  IMAGE_SIZE: 7808k
+  IMAGE_SIZE: 7808k  # 8MB闪存适配，保留k后缀，后续在Shell中处理
 
 jobs:
   build:
@@ -38,11 +38,12 @@ jobs:
       id: verify_dts
       run: |
         echo "检查设备树文件..."
-        if [ -f "target/linux/ath79/dts/qca9563_csac.dts" ]; then
-          echo "✅ 找到设备树文件: qca9563_csac.dts"
+        DTS_PATH="target/linux/ath79/dts/qca9563_csac.dts"
+        if [ -f "$DTS_PATH" ]; then
+          echo "✅ 找到设备树文件: $DTS_PATH"
           echo "dts_valid=true" >> $GITHUB_OUTPUT
         else
-          echo "❌ 错误: 未找到设备树文件 qca9563_csac.dts"
+          echo "❌ 未找到设备树文件 $DTS_PATH"
           ls -la target/linux/ath79/dts/ || exit 1
           exit 1
         fi
@@ -59,38 +60,47 @@ jobs:
           diffutils findutils libc6-dev libtool make patch perl ruby sed \
           tar xmlto xxd cmake pkg-config zip unzip
 
-    - name: 配置编译参数
+    - name: 配置编译参数（处理镜像大小变量）
       run: |
+        # 1. 处理IMAGE_SIZE，去掉末尾的k，得到数字
+        ROOTFS_SIZE="${{ env.IMAGE_SIZE }}"
+        ROOTFS_SIZE="${ROOTFS_SIZE%k}"
+        
+        # 2. 加载配置
         if [ -f "seed.config" ]; then
-          echo "使用自定义的 seed.config 配置文件"
+          echo "使用自定义seed.config"
           cp seed.config .config
         else
-          echo "seed.config 不存在，使用默认配置"
+          echo "使用默认配置"
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
         fi
+        
+        # 3. 追加必要配置
         echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${{ env.IMAGE_SIZE%k }}" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${ROOTFS_SIZE}" >> .config
+        
+        # 4. 追加额外选项
         if [ -n "${{ github.event.inputs.build_options }}" ]; then
           echo "${{ github.event.inputs.build_options }}" >> .config
         fi
 
-    - name: 下载 feeds
+    - name: 下载feeds
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 配置编译选项
+    - name: 生成编译配置
       run: |
         make defconfig
-        echo "配置完成，开始编译..."
+        echo "编译配置生成完成"
 
     - name: 开始编译
       run: |
         echo "开始编译 ${{ env.DEVICE }}..."
         if ! time make -j$(($(nproc)+1)) V=s 2>&1 | tee build.log; then
-          echo "⚠️  多线程编译失败，切换为单线程重新编译..."
+          echo "⚠️  多线程编译失败，切换单线程..."
           time make -j1 V=s 2>&1 | tee -a build.log
           exit 1
         fi
@@ -99,17 +109,16 @@ jobs:
       id: check_firm
       run: |
         BIN_DIR="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
+        # 查找固件目录
         if [ ! -d "$BIN_DIR" ] || [ -z "$(find $BIN_DIR -name "*.bin")" ]; then
-          echo "⚠️  主目录无固件，查找build_dir中的临时固件..."
           BIN_DIR=$(find build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp -name "*.bin" | xargs -n1 dirname | head -1)
           if [ -z "$BIN_DIR" ]; then
-            echo "❌ 未找到任何固件，打印最后200行日志："
+            echo "❌ 未找到固件，打印日志..."
             tail -200 build.log
             exit 1
           fi
         fi
-        echo "✅ 找到的固件文件："
-        find "$BIN_DIR" -name "*.bin" -o -name "*.img"
+        echo "✅ 固件目录: $BIN_DIR"
         echo "FIRMWARE_DIR=$BIN_DIR" >> $GITHUB_ENV
 
     - name: 上传固件到WeTransfer（7天有效）
