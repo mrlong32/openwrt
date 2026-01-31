@@ -1,139 +1,91 @@
-name: Build OpenWrt 25.12 (CSAC专属·兜底必成版)
+name: Build OpenWrt 25.12 for CSAC Router
 
 on:
   workflow_dispatch:
     inputs:
-      build_options:
-        description: '额外编译选项 (可选)'
+      build_type:
+        description: '编译类型'
         required: false
-        default: ''
-  push:
-    branches: ["main", "master"]
-
-env:
-  TARGET: ath79
-  SUBTARGET: generic
-  DEVICE: csac_qca9563-csac
-  BRANCH: main
-  IMAGE_SIZE: 7808
+        default: 'minimal'
+        enum: ['full', 'minimal']
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 300
+    strategy:
+      matrix:
+        image_type: [squashfs]
+
     steps:
-    - name: 检出25.12主代码
+    - name: Checkout代码
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        ref: ${{ env.BRANCH }}
+        ref: openwrt-25.12
 
-    - name: 验证CSAC设备树&创核心目录
-      run: |
-        # 验证设备树
-        DTS_PATH="target/linux/ath79/dts/qca9563_csac.dts"
-        if [ ! -f "$DTS_PATH" ]; then
-          echo "❌ 未找到CSAC设备树：$DTS_PATH"
-          exit 1
-        fi
-        echo "✅ 验证CSAC设备树成功"
-        # 提前创建固件输出目录，解决No such file or directory
-        mkdir -p bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}
-        mkdir -p build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp
-        echo "✅ 提前创建所有编译/输出目录，避免目录缺失"
-
-    - name: 安装25.12编译核心依赖（无权限问题）
+    - name: 安装依赖
       run: |
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          build-essential ccache gawk gettext git libelf-dev libncurses5-dev \
-          libncursesw5-dev libssl-dev python3 python3-distutils rsync time \
-          unzip wget zlib1g-dev bison flex bash bc binutils bzip2 make patch \
-          sed tar xxd pkg-config u-boot-tools jq
-        sudo apt-get clean
-
-    - name: 屏蔽无用feeds&仅加载系统核心依赖
+        sudo apt-get install -y \
+          build-essential \
+          ccache \
+          ecj \
+          fastjar \
+          file \
+          g++ \
+          gawk \
+          gettext \
+          git \
+          java-propose-classpath \
+          libelf-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libssl-dev \
+          python3 \
+          python3-distutils \
+          python3-setuptools \
+          python3-pip \
+          python3-pyelftools \
+          unzip \
+          wget \
+          rsync \
+          time \
+          xsltproc \
+          zlib1g-dev
+    - name: 配置编译参数
       run: |
-        echo > feeds.conf.default
-        ./scripts/feeds update -f -i
-        ./scripts/feeds install -f -i base
-        echo "✅ 仅加载系统核心feeds，无第三方依赖警告"
-
-    - name: 配置CSAC专属编译参数（纯固件，无多余包）
-      run: |
-        > .config
-        # 核心设备配置
-        echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
-        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
-        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
-        echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${{ env.IMAGE_SIZE }}" >> .config
-        # 彻底禁用多余包
-        echo "CONFIG_ALL=n" >> .config
-        echo "CONFIG_ALL_KMODS=n" >> .config
-        echo "CONFIG_ALL_PACKAGES=n" >> .config
-        echo "CONFIG_PACKAGE_luci=n" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        # 自定义选项
-        if [ -n "${{ github.event.inputs.build_options }}" ]; then
-          echo "${{ github.event.inputs.build_options }}" >> .config
+        # 加载自定义配置
+        if [ -f "seed.config" ]; then
+          echo "使用自定义配置"
+          cp seed.config .config
+        else
+          echo "生成默认配置"
+          make defconfig
         fi
-        make defconfig V=s
-        echo "✅ CSAC专属编译配置生成完成"
-
-    - name: 前置步骤：下载内核/工具链（25.12必加，否则缺依赖）
+        # 应用设备树
+        echo "CONFIG_TARGET_ath79=y" >> .config
+        echo "CONFIG_TARGET_ath79_generic=y" >> .config
+        echo "CONFIG_TARGET_ath79_generic_DEVICE_csac_qca9563-csac=y" >> .config
+    - name: 下载feeds
       run: |
-        echo "📥 下载25.12内核、工具链等编译依赖..."
-        time make download -j$(nproc) V=s 2>&1 | tee download.log
-        echo "✅ 所有编译依赖下载完成"
-
-    - name: 编译CSAC内核&驱动（固件前置核心步骤）
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+    - name: 编译固件
       run: |
-        echo "⚙️  编译CSAC专属内核&驱动..."
-        time make target/linux/compile V=s 2>&1 | tee kernel.log
-        echo "✅ CSAC内核&驱动编译完成"
-
-    - name: 编译CSAC 25.12专属固件（25.12兜底命令，必出bin）
-      run: |
-        echo "🎉 开始编译CSAC 25.12专属固件，全程仅编译当前设备！"
-        # 25.12兜底编译命令，覆盖所有固件生成逻辑
-        time make target/linux/install V=s 2>&1 | tee firmware.log
-        echo "✅ CSAC固件编译完成，开始检查输出"
-
-    - name: 全局查找CSAC固件（兜底查找，无视目录层级）
-      id: find_csac
-      run: |
-        # 全局查找CSAC专属bin固件，不管在哪个目录
-        CSAC_FIRM=$(find . -name "*${{ env.DEVICE }}*.bin" -type f | head -1)
-        if [ -z "$CSAC_FIRM" ]; then
-          echo "❌ 全局未找到CSAC固件，打印关键编译日志："
-          cat kernel.log firmware.log | grep -E "csac|${{ env.DEVICE }}|error|fail|mkimage"
-          exit 1
-        fi
-        # 复制固件到标准目录，方便上传
-        cp "$CSAC_FIRM" bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/
-        CSAC_FIRM_STD="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/$(basename $CSAC_FIRM)"
-        # 打印固件详细信息
-        ls -lh "$CSAC_FIRM_STD"
-        file "$CSAC_FIRM_STD"
-        echo "CSAC_FIRM=$CSAC_FIRM_STD" >> $GITHUB_ENV
-        echo "✅ 找到CSAC 25.12专属固件：$CSAC_FIRM_STD"
-
-    - name: 上传CSAC 25.12专属固件（必传成功）
+        echo "开始编译 ${{ github.event.inputs.build_type }} 固件..."
+        time make -j$(nproc) V=s 2>&1 | tee build.log
+    - name: 上传产物
       uses: actions/upload-artifact@v4
       with:
-        name: CSAC-OpenWrt25.12-最终固件
-        path: ${{ env.CSAC_FIRM }}
-        retention-days: 90
+        name: openwrt-${{ github.sha }}-${{ matrix.image_type }}
+        path: bin/targets/ath79/generic/
 
-    - name: 上传所有编译日志（方便排查）
+    - name: 上传日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: CSAC-全量编译日志
+        name: build-log-${{ github.sha }}
         path: |
           build.log
-          download.log
-          kernel.log
-          firmware.log
-        retention-days: 7
+          .config
