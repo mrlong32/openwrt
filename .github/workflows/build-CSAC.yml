@@ -1,4 +1,4 @@
-name: Build OpenWrt 25.12
+name: Build OpenWrt 25.12 (仅编译CSAC)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ on:
 env:
   TARGET: ath79
   SUBTARGET: generic
-  DEVICE: csac_qca9563-csac
+  DEVICE: csac_qca9563-csac  # 你的设备名，全程复用
   BRANCH: main
   IMAGE_SIZE: 7808
 
@@ -34,195 +34,104 @@ jobs:
         submodules: recursive
         ref: ${{ env.BRANCH }}
 
-    - name: 验证设备树文件
+    - name: 验证CSAC设备树（只检查你的设备）
       id: verify_dts
       run: |
-        echo "检查设备树文件..."
-        if [ -f "target/linux/ath79/dts/qca9563_csac.dts" ]; then
-          echo "✅ 找到设备树文件: qca9563_csac.dts"
+        DTS_PATH="target/linux/ath79/dts/qca9563_csac.dts"
+        if [ -f "$DTS_PATH" ]; then
+          echo "✅ 找到CSAC设备树: $DTS_PATH"
           echo "dts_valid=true" >> $GITHUB_OUTPUT
         else
-          echo "❌ 错误: 未找到设备树文件 qca9563_csac.dts"
-          echo "请确保在 target/linux/ath79/dts/ 目录下有该文件"
-          ls -la target/linux/ath79/dts/ || echo "设备树目录不存在"
+          echo "❌ 未找到CSAC设备树 $DTS_PATH"
           exit 1
         fi
 
-    - name: 设置编译环境
+    - name: 安装编译环境（补全所有致命依赖，含mkimage）
       run: |
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          build-essential \
-          ccache \
-          ecj \
-          fastjar \
-          file \
-          g++ \
-          gawk \
-          gettext \
-          git \
-          java-propose-classpath \
-          libelf-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          libssl-dev \
-          python3 \
-          python3-distutils \
-          python3-setuptools \
-          python3-pip \
-          python3-pyelftools \
-          unzip \
-          wget \
-          rsync \
-          time \
-          xsltproc \
-          zlib1g-dev \
-          subversion \
-          gperf \
-          bison \
-          flex \
-          asciidoc \
-          bash \
-          bc \
-          binutils \
-          bzip2 \
-          diffutils \
-          findutils \
-          libc6-dev \
-          libtool \
-          make \
-          patch \
-          perl \
-          ruby \
-          sed \
-          tar \
-          xmlto \
-          xxd \
-          cmake \
-          pkg-config \
-          zip unzip jq
+          build-essential ccache ecj fastjar file g++ gawk gettext git \
+          libelf-dev libncurses5-dev libncursesw5-dev libssl-dev \
+          python3 python3-distutils python3-setuptools python3-pip \
+          unzip wget rsync time xsltproc zlib1g-dev subversion gperf \
+          bison flex asciidoc bash bc binutils bzip2 diffutils findutils \
+          libc6-dev libtool make patch perl ruby sed tar xmlto xxd cmake \
+          pkg-config zip unzip jq \
+          u-boot-tools  # 必装！解决Missing mkimage的核心依赖
 
-    - name: 配置编译参数
+    - name: 修复feeds源（极简，仅拉取核心依赖，加快编译）
       run: |
-        # 如果存在 seed.config 则使用，否则使用默认配置
-        if [ -f "seed.config" ]; then
-          echo "使用自定义的 seed.config 配置文件"
-          cp seed.config .config
-        else
-          echo "seed.config 不存在，使用默认配置"
-          # 设置基本配置
-          echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
-        fi
-
-        # 强制启用设备树覆盖
-        echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
-        # 镜像大小直接使用数字，无任何语法处理
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${{ env.IMAGE_SIZE }}" >> .config
-        
-        # 如果需要添加额外选项
-        if [ -n "${{ github.event.inputs.build_options }}" ]; then
-          echo "${{ github.event.inputs.build_options }}" >> .config
-        fi
-
-    # ==============================================
-    # 仅修改这一步！修复feeds源+下载，其余全不变！
-    # ==============================================
-    - name: 修复feeds源并下载（核心修复，解决所有feeds报错）
-      run: |
-        # 1. 备份原feeds.conf，替换为OpenWrt官方可用源（解决核心feeds找不到问题）
         mv feeds.conf.default feeds.conf.default.bak
         cat > feeds.conf.default << EOF
         src-git packages https://github.com/openwrt/packages.git openwrt-23.05
-        src-git luci https://github.com/openwrt/luci.git openwrt-23.05
-        src-git routing https://github.com/openwrt/routing.git openwrt-23.05
-        src-git telephony https://github.com/openwrt/telephony.git openwrt-23.05
-        # 注释掉无用的video源（解决mesa/xkeyboard-config编译报错，你的设备根本不需要）
-        # src-git video https://github.com/openwrt/video.git openwrt-23.05
         EOF
-        # 2. 强制更新feeds（加-f强制覆盖，解决源缓存问题）
         ./scripts/feeds update -f -a
-        # 3. 安装feeds（加-f强制安装，避免依赖缺失）
         ./scripts/feeds install -f -a
 
-    - name: 配置编译选项
+    - name: 配置编译参数（基础配置）
       run: |
-        # 使用现有配置
-        make defconfig
-        echo "配置完成，开始编译..."
+        # 基础配置，只指定架构
+        echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
+        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+        echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${{ env.IMAGE_SIZE }}" >> .config
+        # 追加自定义选项
+        if [ -n "${{ env.INPUT_BUILD_OPTIONS }}" ]; then
+          echo "${{ env.INPUT_BUILD_OPTIONS }}" >> .config
+        fi
 
-    - name: 开始编译
+    # ==============================================
+    # 核心中的核心！强制指定仅编译你的CSAC设备，跳过所有其他设备
+    # ==============================================
+    - name: 强制指定仅编译CSAC设备（解决无CSAC日志的关键）
       run: |
-        echo "开始编译 ${{ env.DEVICE }}..."
-        time make -j$(($(nproc)+1)) V=s 2>&1 | tee build.log
+        make defconfig TARGET_DEVICE="${{ env.TARGET }}_${{ env.SUBTARGET }}_${{ env.DEVICE }}"
+        echo "✅ 已强制指定，本次仅编译CSAC设备：${{ env.DEVICE }}"
 
-    - name: 检查编译结果
-      id: check_firm
+    - name: 编译CSAC专属固件（全程只编译CSAC，无其他设备）
+      run: |
+        echo "开始编译CSAC固件，日志仅显示CSAC相关信息..."
+        # 强制指定设备+仅生成固件+多线程，无任何多余编译
+        time make image TARGET_DEVICE="${{ env.TARGET }}_${{ env.SUBTARGET }}_${{ env.DEVICE }}" -j$(nproc) V=s 2>&1 | tee build.log
+
+    - name: 检查CSAC固件（只找CSAC的bin文件，精准定位）
+      id: check_csac_firm
       run: |
         BIN_DIR="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
-        if [ -d "$BIN_DIR" ]; then
-          echo "✅ 编译成功！生成的固件文件："
-          find "$BIN_DIR" -name "*.bin" -o -name "*.img" -o -name "*.gz" | while read file; do
-            echo "- $(basename "$file")"
-            ls -lh "$file"
-          done
-          # 检查initramfs固件
-          if find "$BIN_DIR" -name "*initramfs-kernel.bin" | grep -q .; then
-            echo "✅ 已成功生成 initramfs-kernel.bin 固件！"
-          else
-            echo "⚠️  未生成 initramfs-kernel.bin ，请检查设备树/镜像配置"
-          fi
+        # 只过滤CSAC相关的固件文件
+        CSAC_FIRM=$(find "$BIN_DIR" -name "*${{ env.DEVICE }}*.bin")
+        if [ -n "$CSAC_FIRM" ]; then
+          echo "✅ CSAC固件生成成功！文件："
+          ls -lh $CSAC_FIRM
+          echo "CSAC_FIRM=$CSAC_FIRM" >> $GITHUB_ENV
           echo "FIRMWARE_DIR=$BIN_DIR" >> $GITHUB_ENV
         else
-          echo "❌ 错误：编译失败，$BIN_DIR 目录不存在"
-          echo "显示编译日志的最后200行："
+          echo "❌ 未找到CSAC固件，打印最后200行日志："
           tail -200 build.log
           exit 1
         fi
 
-    - name: 上传固件制品
+    - name: 上传CSAC专属固件（仅传CSAC的bin文件）
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-${{ env.DEVICE }}-${{ github.sha }}-${{ matrix.image_type }}
-        path: ${{ env.FIRMWARE_DIR }}/
+        name: CSAC-OpenWrt固件
+        path: ${{ env.CSAC_FIRM }}
         retention-days: 7
 
-    - name: 上传编译日志
+    - name: 上传编译日志（方便排查）
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-log-${{ github.sha }}
-        path: |
-          build.log
-          .config
+        name: CSAC-编译日志
+        path: build.log
         retention-days: 7
 
-    - name: 通知结果
+    - name: 最终结果通知
       if: always()
       run: |
-        if [ -d "${{ env.FIRMWARE_DIR }}" ]; then
-          echo "✅ 编译成功！"
-          echo "可以在 Artifacts 中找到编译好的固件。"
+        if [ -n "${{ env.CSAC_FIRM }}" ]; then
+          echo "🎉 CSAC固件编译成功！可在Artifacts下载专属bin文件"
         else
-          echo "❌ 编译失败！"
-          echo "请检查 build.log 文件中的错误信息。"
+          echo "❌ CSAC固件编译失败，请查看日志"
           exit 1
         fi
-
-    # 最简WeTransfer免费上传（独立步骤，不影响核心编译）
-    - name: 压缩固件+日志（用于WeTransfer上传）
-      if: steps.check_firm.outcome == 'success'
-      run: |
-        mkdir -p csac_upload
-        cp -r ${{ env.FIRMWARE_DIR }}/* csac_upload/
-        cp build.log .config csac_upload/
-        zip -r csac_openwrt_$(date +%Y%m%d).zip csac_upload/
-
-    - name: 上传到WeTransfer免费版（7天有效，仅原生curl，无任何依赖）
-      if: steps.check_firm.outcome == 'success'
-      run: |
-        FILE="csac_openwrt_$(date +%Y%m%d).zip"
-        RESP=$(curl -s -F "file=@$FILE" https://wetransfer.com/api/v1/transfers | jq -r '.url')
-        echo "🎉 WeTransfer免费下载链接（7天有效）：$RESP"
-        echo "下载链接：$RESP" >> $GITHUB_ENV
