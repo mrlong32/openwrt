@@ -22,9 +22,9 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        ref: main
+        ref: openwrt-25.12
 
-    - name: 安装依赖
+    - name: 安装依赖（补mkimage+squashfs工具，核心修复）
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -52,10 +52,16 @@ jobs:
           rsync \
           time \
           xsltproc \
-          zlib1g-dev
+          zlib1g-dev \
+          u-boot-tools \
+          squashfs-tools  # 新增：解决squashfs打包警告
+        # 核心修复：创建mkimage软链接，映射到OpenWrt识别的Build目录
+        sudo ln -sf /usr/bin/mkimage $(pwd)/Build/mkimage
+        sudo chmod +x $(pwd)/Build/mkimage
+        sudo apt-get clean
+
     - name: 配置编译参数
       run: |
-        # 加载自定义配置
         if [ -f "seed.config" ]; then
           echo "使用自定义配置"
           cp seed.config .config
@@ -63,19 +69,32 @@ jobs:
           echo "生成默认配置"
           make defconfig
         fi
-        # 应用设备树
         echo "CONFIG_TARGET_ath79=y" >> .config
         echo "CONFIG_TARGET_ath79_generic=y" >> .config
         echo "CONFIG_TARGET_ath79_generic_DEVICE_csac_qca9563-csac=y" >> .config
+        if [ "${{ github.event.inputs.build_type }}" = "minimal" ]; then
+          echo "CONFIG_ALL=n" >> .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_ALL_PACKAGES=n" >> .config
+          echo "CONFIG_PACKAGE_luci=n" >> .config
+        fi
+        make defconfig TARGET_DEVICE="ath79_generic_csac_qca9563-csac"
+
     - name: 下载feeds
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-    - name: 编译固件
+
+    - name: 编译固件（mkimage已就绪，可正常打包）
       run: |
         echo "开始编译 ${{ github.event.inputs.build_type }} 固件..."
-        time make -j$(nproc) V=s 2>&1 | tee build.log
-    - name: 上传产物
+        if [ "${{ github.event.inputs.build_type }}" = "minimal" ]; then
+          time make -j1 V=s 2>&1 | tee build.log
+        else
+          time make -j$(nproc) V=s 2>&1 | tee build.log
+        fi
+
+    - name: 上传产物（包含CSAC专属bin固件）
       uses: actions/upload-artifact@v4
       with:
         name: openwrt-${{ github.sha }}-${{ matrix.image_type }}
