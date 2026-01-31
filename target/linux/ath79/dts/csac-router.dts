@@ -1,0 +1,175 @@
+// CSAC路由器设备树文件
+// 硬件配置: QCA9563 + QCA8337 + QCA9886, 128MB内存 + 16MB闪存
+// 作者: AiPy
+// 日期: 2026-01-31
+#include "qca956x.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+/ {
+	compatible = "csac,csac-router", "qca,qca9563";
+	model = "CSAC Router";
+	aliases {
+		led-boot = &led_power;
+		led-failsafe = &led_power;
+		led-running = &led_power;
+		led-upgrade = &led_power;
+		serial0 = &uart0;
+	};
+	leds {
+		compatible = "gpio-leds";
+		led_power: power {
+			label = "green:power";
+			gpios = <&gpio 1 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+		};
+		wlan2g {
+			label = "green:wlan2g";
+			gpios = <&gpio 11 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "phy0tpt";
+		};
+		wlan5g {
+			label = "green:wlan5g";
+			gpios = <&gpio 12 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "phy1tpt";
+		};
+		lan {
+			label = "green:lan";
+			gpios = <&gpio 13 GPIO_ACTIVE_HIGH>;
+		};
+		wan {
+			label = "green:wan";
+			gpios = <&gpio 14 GPIO_ACTIVE_HIGH>;
+		};
+		wan_fail {
+			label = "red:wan";
+			gpios = <&gpio 15 GPIO_ACTIVE_HIGH>;
+		};
+	};
+	keys {
+		compatible = "gpio-keys";
+		reset {
+			label = "reset";
+			gpios = <&gpio 2 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+		wps {
+			label = "wps";
+			gpios = <&gpio 0 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+	};
+	watchdog {
+		compatible = "linux,wdt-gpio";
+		gpios = <&gpio 16 GPIO_ACTIVE_LOW>;
+		hw_algo = "toggle";
+		hw_margin_ms = <10000>;
+		always-running;
+	};
+};
+&spi {
+	status = "okay";
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <25000000>;
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			partition@0 {
+				label = "u-boot";
+				reg = <0x000000 0x020000>;
+				read-only;
+			};
+			partition@20000 {
+				label = "u-boot-env";
+				reg = <0x020000 0x010000>;
+			};
+			partition@30000 {
+				label = "art";
+				reg = <0x030000 0x010000>;
+				read-only;
+				compatible = "nvmem-cells";
+				#address-cells = <1>;
+				#size-cells = <1>;
+				calibration_ath9k: calibration@1000 {
+					reg = <0x1000 0x440>;
+				};
+				calibration_ath10k: calibration@5000 {
+					reg = <0x5000 0x844>;
+				};
+			};
+			partition@40000 {
+				label = "kernel";
+				reg = <0x040000 0x100000>;
+			};
+			partition@140000 {
+				label = "rootfs";
+				reg = <0x140000 0xea0000>;
+			};
+			partition@fe0000 {
+				label = "rootfs_data";
+				reg = <0xfe0000 0x020000>;
+			};
+		};
+	};
+};
+&uart0 {
+	status = "okay";
+};
+&usb_phy0 {
+	status = "okay";
+};
+&usb0 {
+	status = "okay";
+};
+&pcie0 {
+	status = "okay";
+	wifi@0,0 {
+		compatible = "qcom,ath10k";
+		reg = <0x0000 0 0 0 0>;
+		nvmem-cells = <&calibration_ath10k>;
+		nvmem-cell-names = "calibration";
+		qcom,ath10k-calibration-variant = "CSAC-Router";
+	};
+};
+&mdio0 {
+	status = "okay";
+	phy0: ethernet-phy@0 {
+		reg = <0>;
+		phy-mode = "rgmii-id";
+	};
+	phy4: ethernet-phy@4 {
+		reg = <4>;
+		phy-mode = "rgmii-id";
+	};
+};
+&eth0 {
+	status = "okay";
+	phy-handle = <&phy0>;
+	phy-mode = "rgmii-id";
+	nvmem-cells = <&macaddr_art_0>;
+	nvmem-cell-names = "mac-address";
+};
+&eth1 {
+	status = "okay";
+	phy-handle = <&phy4>;
+	phy-mode = "rgmii-id";
+	nvmem-cells = <&macaddr_art_6>;
+	nvmem-cell-names = "mac-address";
+};
+&wmac {
+	status = "okay";
+	mtd-cal-data = <&calibration_ath9k 0x1000>;
+};
+&art {
+	compatible = "nvmem-cells";
+	#address-cells = <1>;
+	#size-cells = <1>;
+	macaddr_art_0: macaddr@0 {
+		reg = <0x0 0x6>;
+	};
+	macaddr_art_6: macaddr@6 {
+		reg = <0x6 0x6>;
+	};
+};

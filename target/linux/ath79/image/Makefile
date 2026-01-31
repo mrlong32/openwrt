@@ -121,3 +121,19 @@ include tiny-ubnt.mk
 endif
 
 $(eval $(call BuildImage))
+
+# CSAC Router
+define Device/csac-csac-router
+  ATH_SOC := qca9563
+  DEVICE_VENDOR := CSAC
+  DEVICE_MODEL := Router
+  DEVICE_PACKAGES := \
+    kmod-usb2 kmod-usb-ohci kmod-usb-ledtrig-usbport \
+    kmod-ath10k-ct ath10k-firmware-qca9886-ct \
+    luci luci-ssl-openssl \
+    swconfig iw hostapd wpa-supplicant
+  IMAGE_SIZE := 16064k
+  BLOCKSIZE := 64k
+  PAGESIZE := 256
+endef
+TARGET_DEVICES += csac-csac-router
