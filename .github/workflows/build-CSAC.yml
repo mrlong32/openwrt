@@ -1,4 +1,4 @@
-name: Build OpenWrt 25.12 (仅编译CSAC)
+name: Build OpenWrt 25.12 (CSAC专属·终极版)
 
 on:
   workflow_dispatch:
@@ -9,13 +9,11 @@ on:
         default: ''
   push:
     branches: ["main", "master"]
-  schedule:
-    - cron: '0 2 * * 1'
 
 env:
   TARGET: ath79
   SUBTARGET: generic
-  DEVICE: csac_qca9563-csac  # 你的设备名，全程复用
+  DEVICE: csac_qca9563-csac
   BRANCH: main
   IMAGE_SIZE: 7808
 
@@ -23,100 +21,91 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 300
-    strategy:
-      matrix:
-        image_type: [squashfs]
-
     steps:
-    - name: 检出代码
+    - name: 检出25.12主代码
       uses: actions/checkout@v4
       with:
         submodules: recursive
         ref: ${{ env.BRANCH }}
 
-    - name: 验证CSAC设备树（只检查你的设备）
-      id: verify_dts
+    - name: 验证CSAC设备树
       run: |
         DTS_PATH="target/linux/ath79/dts/qca9563_csac.dts"
-        if [ -f "$DTS_PATH" ]; then
-          echo "✅ 找到CSAC设备树: $DTS_PATH"
-          echo "dts_valid=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ 未找到CSAC设备树 $DTS_PATH"
+        if [ ! -f "$DTS_PATH" ]; then
+          echo "❌ 未找到CSAC设备树：$DTS_PATH"
           exit 1
         fi
+        echo "✅ 验证CSAC设备树成功"
 
-    - name: 安装编译环境（补全所有致命依赖，含mkimage）
+    - name: 安装25.12编译核心依赖（仅装必须的，含mkimage）
       run: |
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          build-essential ccache ecj fastjar file g++ gawk gettext git \
-          libelf-dev libncurses5-dev libncursesw5-dev libssl-dev \
-          python3 python3-distutils python3-setuptools python3-pip \
-          unzip wget rsync time xsltproc zlib1g-dev subversion gperf \
-          bison flex asciidoc bash bc binutils bzip2 diffutils findutils \
-          libc6-dev libtool make patch perl ruby sed tar xmlto xxd cmake \
-          pkg-config zip unzip jq \
-          u-boot-tools  # 必装！解决Missing mkimage的核心依赖
+          build-essential ccache gawk gettext git libelf-dev libncurses5-dev \
+          libncursesw5-dev libssl-dev python3 python3-distutils rsync time \
+          unzip wget zlib1g-dev bison flex bash bc binutils bzip2 make patch \
+          sed tar xxd pkg-config u-boot-tools jq
+        sudo apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    - name: 修复feeds源（极简，仅拉取核心依赖，加快编译）
+    - name: 彻底屏蔽无用feeds（核心！消除所有依赖警告，纯固件编译无需feeds）
       run: |
-        mv feeds.conf.default feeds.conf.default.bak
-        cat > feeds.conf.default << EOF
-        src-git packages https://github.com/openwrt/packages.git openwrt-23.05
-        EOF
-        ./scripts/feeds update -f -a
-        ./scripts/feeds install -f -a
+        # 清空feeds.conf，不加载任何第三方feeds，彻底消除依赖警告
+        echo > feeds.conf.default
+        # 仅更新系统内置核心feeds，不安装任何第三方包
+        ./scripts/feeds update -f -i
+        ./scripts/feeds install -f -i base
 
-    - name: 配置编译参数（基础配置）
+    - name: 配置CSAC专属编译参数（禁用所有多余包，纯固件）
       run: |
-        # 基础配置，只指定架构
-        echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
+        # 初始化空配置
+        > .config
+        # 仅开启CSAC设备相关配置，其余全关
+        echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
         echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
         echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
         echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${{ env.IMAGE_SIZE }}" >> .config
+        # 彻底禁用全量包/内核模块/第三方包
+        echo "CONFIG_ALL=n" >> .config
+        echo "CONFIG_ALL_KMODS=n" >> .config
+        echo "CONFIG_ALL_PACKAGES=n" >> .config
+        echo "CONFIG_PACKAGE_luci=n" >> .config
+        echo "CONFIG_PACKAGE_routing=n" >> .config
         # 追加自定义选项
-        if [ -n "${{ env.INPUT_BUILD_OPTIONS }}" ]; then
-          echo "${{ env.INPUT_BUILD_OPTIONS }}" >> .config
+        if [ -n "${{ github.event.inputs.build_options }}" ]; then
+          echo "${{ github.event.inputs.build_options }}" >> .config
         fi
+        # 生成配置
+        make defconfig V=s
 
-    # ==============================================
-    # 核心中的核心！强制指定仅编译你的CSAC设备，跳过所有其他设备
-    # ==============================================
-    - name: 强制指定仅编译CSAC设备（解决无CSAC日志的关键）
+    - name: 编译CSAC 25.12专属固件（替换25.12兼容的target-images，强制单设备）
       run: |
-        make defconfig TARGET_DEVICE="${{ env.TARGET }}_${{ env.SUBTARGET }}_${{ env.DEVICE }}"
-        echo "✅ 已强制指定，本次仅编译CSAC设备：${{ env.DEVICE }}"
+        echo "🎉 开始编译CSAC 25.12专属固件，全程仅编译当前设备！"
+        # 25.12用target-images替代原image，-j1稳编，V=s看详细CSAC日志
+        time make target-images -j1 V=s 2>&1 | tee build.log
 
-    - name: 编译CSAC专属固件（全程只编译CSAC，无其他设备）
-      run: |
-        echo "开始编译CSAC固件，日志仅显示CSAC相关信息..."
-        # 强制指定设备+仅生成固件+多线程，无任何多余编译
-        time make image TARGET_DEVICE="${{ env.TARGET }}_${{ env.SUBTARGET }}_${{ env.DEVICE }}" -j$(nproc) V=s 2>&1 | tee build.log
-
-    - name: 检查CSAC固件（只找CSAC的bin文件，精准定位）
-      id: check_csac_firm
+    - name: 检查并提取CSAC专属固件（精准过滤，只找你的设备bin文件）
+      id: check_csac
       run: |
         BIN_DIR="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
-        # 只过滤CSAC相关的固件文件
-        CSAC_FIRM=$(find "$BIN_DIR" -name "*${{ env.DEVICE }}*.bin")
-        if [ -n "$CSAC_FIRM" ]; then
-          echo "✅ CSAC固件生成成功！文件："
-          ls -lh $CSAC_FIRM
-          echo "CSAC_FIRM=$CSAC_FIRM" >> $GITHUB_ENV
-          echo "FIRMWARE_DIR=$BIN_DIR" >> $GITHUB_ENV
-        else
-          echo "❌ 未找到CSAC固件，打印最后200行日志："
-          tail -200 build.log
+        # 精准匹配CSAC设备固件，避免其他文件干扰
+        CSAC_FIRM=$(find "$BIN_DIR" -maxdepth 1 -name "*${{ env.DEVICE }}*.bin" | head -1)
+        if [ -z "$CSAC_FIRM" ]; then
+          echo "❌ 未找到CSAC固件，打印核心日志："
+          grep -E "csac|${{ env.DEVICE }}|error|warn" build.log
           exit 1
         fi
+        # 打印固件信息
+        ls -lh "$CSAC_FIRM"
+        echo "CSAC_FIRM=$CSAC_FIRM" >> $GITHUB_ENV
+        echo "✅ CSAC 25.12固件生成成功！"
 
-    - name: 上传CSAC专属固件（仅传CSAC的bin文件）
+    - name: 上传CSAC 25.12专属固件（仅传bin文件）
       uses: actions/upload-artifact@v4
       with:
-        name: CSAC-OpenWrt固件
+        name: CSAC-OpenWrt25.12-固件
         path: ${{ env.CSAC_FIRM }}
-        retention-days: 7
+        retention-days: 30
 
     - name: 上传编译日志（方便排查）
       if: always()
@@ -125,13 +114,3 @@ jobs:
         name: CSAC-编译日志
         path: build.log
         retention-days: 7
-
-    - name: 最终结果通知
-      if: always()
-      run: |
-        if [ -n "${{ env.CSAC_FIRM }}" ]; then
-          echo "🎉 CSAC固件编译成功！可在Artifacts下载专属bin文件"
-        else
-          echo "❌ CSAC固件编译失败，请查看日志"
-          exit 1
-        fi
