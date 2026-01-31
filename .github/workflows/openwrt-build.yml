@@ -2,11 +2,8 @@ name: OpenWrt Build for CSAC Router
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'target/linux/ath79/dts/csac-router.dts'
-      - 'target/linux/ath79/image/Makefile'
-      - '.config'
-      - '.config.csac.sample'
+    # 移除paths限制，每次推送都触发编译
+    # 这样可以确保.config文件被正确处理
   pull_request:
     branches: [ main ]
   workflow_dispatch:
