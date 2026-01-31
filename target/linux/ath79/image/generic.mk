@@ -3488,20 +3488,20 @@ define Device/csac_qca9563-csac
  define Image/Build/factory
  $(call prepare_generic_squashfs,factory)
  $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
- $(STAGING_DIR_HOST)/bin/pad-to $$(( 8 * 1024 * 1024 )) \
+ $(STAGING_DIR_HOST)/bin/pad-to $$(( 14880 )) \
  $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
  endef
 
  define Image/Build/sysupgrade
  $(call prepare_generic_squashfs,sysupgrade)
  $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
- $(STAGING_DIR_HOST)/bin/pad-to $$(( 8 * 1024 * 1024 )) \
+ $(STAGING_DIR_HOST)/bin/pad-to $$(( 14880 )) \
  $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
  endef
 
  # 修正设备树配置
  DEVICE_DTS := qca9563_csac
- DEVICE_DTS_CONFIG := config@0
+# DEVICE_DTS_CONFIG := config@0
 
  # 注释掉无效签名
  # define Image/Build/sign
