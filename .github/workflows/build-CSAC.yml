@@ -18,13 +18,13 @@ jobs:
         image_type: [squashfs]
 
     steps:
-    - name: Checkout代码
+    - name: Checkout代码（拉取你仓库的main分支，已确认是原openwrt-25.12）
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        ref: openwrt-25.12
+        ref: main
 
-    - name: 安装依赖（补mkimage+squashfs工具，核心修复）
+    - name: 安装依赖（仅补u-boot-tools/squashfs-tools，其余和你原版一致）
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -54,13 +54,13 @@ jobs:
           xsltproc \
           zlib1g-dev \
           u-boot-tools \
-          squashfs-tools  # 新增：解决squashfs打包警告
-        # 核心修复：创建mkimage软链接，映射到OpenWrt识别的Build目录
+          squashfs-tools
+        # 仅添加mkimage软链接，解决打包固件的Missing Build/mkimage问题
         sudo ln -sf /usr/bin/mkimage $(pwd)/Build/mkimage
         sudo chmod +x $(pwd)/Build/mkimage
         sudo apt-get clean
 
-    - name: 配置编译参数
+    - name: 配置编译参数（和你原版完全一致，仅加minimal禁用全量包）
       run: |
         if [ -f "seed.config" ]; then
           echo "使用自定义配置"
@@ -69,9 +69,11 @@ jobs:
           echo "生成默认配置"
           make defconfig
         fi
+        # 你原版的设备树配置，一字未改
         echo "CONFIG_TARGET_ath79=y" >> .config
         echo "CONFIG_TARGET_ath79_generic=y" >> .config
         echo "CONFIG_TARGET_ath79_generic_DEVICE_csac_qca9563-csac=y" >> .config
+        # minimal模式仅禁用全量包，避免编译其他设备，不改动其他逻辑
         if [ "${{ github.event.inputs.build_type }}" = "minimal" ]; then
           echo "CONFIG_ALL=n" >> .config
           echo "CONFIG_ALL_KMODS=n" >> .config
@@ -80,12 +82,12 @@ jobs:
         fi
         make defconfig TARGET_DEVICE="ath79_generic_csac_qca9563-csac"
 
-    - name: 下载feeds
+    - name: 下载feeds（和你原版完全一致，无任何改动）
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 编译固件（mkimage已就绪，可正常打包）
+    - name: 编译固件（保留你原版的编译类型判断，minimal单线程稳编）
       run: |
         echo "开始编译 ${{ github.event.inputs.build_type }} 固件..."
         if [ "${{ github.event.inputs.build_type }}" = "minimal" ]; then
@@ -94,13 +96,13 @@ jobs:
           time make -j$(nproc) V=s 2>&1 | tee build.log
         fi
 
-    - name: 上传产物（包含CSAC专属bin固件）
+    - name: 上传产物（和你原版完全一致，路径、命名都不变）
       uses: actions/upload-artifact@v4
       with:
         name: openwrt-${{ github.sha }}-${{ matrix.image_type }}
         path: bin/targets/ath79/generic/
 
-    - name: 上传日志
+    - name: 上传日志（和你原版完全一致，保留build.log和.config）
       if: always()
       uses: actions/upload-artifact@v4
       with:
