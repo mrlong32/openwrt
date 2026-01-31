@@ -1,4 +1,4 @@
-name: Build OpenWrt 25.12 (CSAC专属·终极版)
+name: Build OpenWrt 25.12 (CSAC专属·最终可运行版)
 
 on:
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
         fi
         echo "✅ 验证CSAC设备树成功"
 
-    - name: 安装25.12编译核心依赖（仅装必须的，含mkimage）
+    - name: 安装25.12编译核心依赖（仅装必须的，含mkimage，删除权限报错的清理）
       run: |
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -45,7 +45,8 @@ jobs:
           libncursesw5-dev libssl-dev python3 python3-distutils rsync time \
           unzip wget zlib1g-dev bison flex bash bc binutils bzip2 make patch \
           sed tar xxd pkg-config u-boot-tools jq
-        sudo apt-get clean && rm -rf /var/lib/apt/lists/*
+        # 仅保留sudo apt-get clean，删掉rm -rf /var/lib/apt/lists/* 解决权限错误
+        sudo apt-get clean
 
     - name: 彻底屏蔽无用feeds（核心！消除所有依赖警告，纯固件编译无需feeds）
       run: |
@@ -78,7 +79,7 @@ jobs:
         # 生成配置
         make defconfig V=s
 
-    - name: 编译CSAC 25.12专属固件（替换25.12兼容的target-images，强制单设备）
+    - name: 编译CSAC 25.12专属固件（25.12兼容target-images，单线程稳编）
       run: |
         echo "🎉 开始编译CSAC 25.12专属固件，全程仅编译当前设备！"
         # 25.12用target-images替代原image，-j1稳编，V=s看详细CSAC日志
