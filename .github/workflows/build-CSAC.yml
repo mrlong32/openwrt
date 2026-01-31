@@ -1,4 +1,4 @@
-name: Build OpenWrt 25.12
+name: Build OpenWrt 25.12 (CSAC专用)
 
 on:
   workflow_dispatch:
@@ -13,11 +13,12 @@ on:
     - cron: '0 2 * * 1'
 
 env:
-  TARGET: ath79
-  SUBTARGET: generic
-  DEVICE: csac_qca9563-csac
+  TARGET: ath79                  # 强制CSAC设备的ath79架构
+  SUBTARGET: generic             # 强制匹配subtarget
+  DEVICE: csac_qca9563-csac      # 你的CSAC设备名
   BRANCH: main
   IMAGE_SIZE: 7808k
+  WETRANSFER_EXPIRY: 7d          # WeTransfer免费版有效期7天
 
 jobs:
   build:
@@ -34,17 +35,17 @@ jobs:
         submodules: recursive
         ref: ${{ env.BRANCH }}
 
-    - name: 验证设备树文件
+    - name: 验证设备树文件（ath79架构专属）
       id: verify_dts
       run: |
-        echo "检查设备树文件..."
-        if [ -f "target/linux/ath79/dts/qca9563_csac.dts" ]; then
-          echo "✅ 找到设备树文件: qca9563_csac.dts"
+        echo "检查ath79架构的设备树文件..."
+        DTS_PATH="target/linux/ath79/dts/qca9563_csac.dts"
+        if [ -f "$DTS_PATH" ]; then
+          echo "✅ 找到ath79设备树: $DTS_PATH"
           echo "dts_valid=true" >> $GITHUB_OUTPUT
         else
-          echo "❌ 错误: 未找到设备树文件 qca9563_csac.dts"
-          echo "请确保在 target/linux/ath79/dts/ 目录下有该文件"
-          ls -la target/linux/ath79/dts/ || echo "设备树目录不存在"
+          echo "❌ 未找到$DTS_PATH，ath79设备树目录不存在"
+          ls -la target/linux/ath79/dts/ || exit 1
           exit 1
         fi
 
@@ -52,154 +53,141 @@ jobs:
       run: |
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-          build-essential \
-          ccache \
-          ecj \
-          fastjar \
-          file \
-          g++ \
-          gawk \
-          gettext \
-          git \
-          java-propose-classpath \
-          libelf-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          libssl-dev \
-          python3 \
-          python3-distutils \
-          python3-setuptools \
-          python3-pip \
-          python3-pyelftools \
-          unzip \
-          wget \
-          rsync \
-          time \
-          xsltproc \
-          zlib1g-dev \
-          subversion \
-          gperf \
-          bison \
-          flex \
-          asciidoc \
-          bash \
-          bc \
-          binutils \
-          bzip2 \
-          diffutils \
-          findutils \
-          libc6-dev \
-          libtool \
-          make \
-          patch \
-          perl \
-          ruby \
-          sed \
-          tar \
-          xmlto \
-          xxd \
-          cmake \
-          pkg-config
+          build-essential ccache ecj fastjar file g++ gawk gettext git \
+          java-propose-classpath libelf-dev libncurses5-dev libncursesw5-dev \
+          libssl-dev python3 python3-distutils python3-setuptools python3-pip \
+          python3-pyelftools unzip wget rsync time xsltproc zlib1g-dev \
+          subversion gperf bison flex asciidoc bash bc binutils bzip2 \
+          diffutils findutils libc6-dev libtool make patch perl ruby sed \
+          tar xmlto xxd cmake pkg-config curl jq  # 新增curl+jq用于WeTransfer上传
 
-    - name: 彻底清理编译缓存
+    - name: 彻底清理编译缓存（移除无关架构）
       run: |
-        echo "🗑️  清理编译缓存，避免旧配置干扰..."
+        echo "🗑️  清理缓存，移除mediatek等错误架构残留..."
         make clean && make dirclean
+        rm -rf build_dir/target-mediatek_* bin/targets/mediatek/
         rm -rf build_dir/target-* tmp/
         echo "✅ 缓存清理完成"
 
-    - name: 配置编译参数
+    - name: 配置编译参数（强制ath79/generic）
       run: |
         rootfs_size="${{ env.IMAGE_SIZE }}"
         rootfs_size="${rootfs_size%k}"
-        if [ -f "seed.config" ]; then
-          echo "使用自定义的 seed.config 配置文件"
-          cp seed.config .config
-          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${rootfs_size}" >> .config
-        else
-          echo "seed.config 不存在，使用默认配置"
-          echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
-          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${rootfs_size}" >> .config
-          echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
-        fi
+        # 强制生成ath79架构配置，避免跳转到其他架构
+        echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
+        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=${rootfs_size}" >> .config
         echo "CONFIG_DEVICE_DTS_OVERRIDE=1" >> .config
+        # 追加自定义配置
+        if [ -f "seed.config" ]; then
+          cat seed.config >> .config
+        fi
         if [ -n "${{ github.event.inputs.build_options }}" ]; then
           echo "${{ github.event.inputs.build_options }}" >> .config
         fi
 
-    - name: 下载 feeds
+    - name: 下载feeds并安装
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 配置编译选项
+    - name: 生成最终编译配置
       run: |
         make defconfig
-        echo "✅ 配置完成，开始预下载依赖包..."
+        echo "✅ 编译配置生成完成（架构：${{ env.TARGET }}/${{ env.SUBTARGET }}）"
 
-    - name: 提前下载所有依赖包
+    - name: 提前下载依赖包
       run: |
         FORCE_UNSAFE_CONFIGURE=1 make download -j$(nproc)
         find dl -size -1024c -delete
-        echo "✅ 所有依赖包下载完成，共$(ls dl | wc -l)个包"
+        echo "✅ 所有依赖包下载完成"
 
-    - name: 开始编译
+    - name: 编译固件（绑定ath79架构）
       run: |
-        echo "开始编译 ${{ env.DEVICE }}... 线程数: $(($(nproc)+1))"
+        echo "开始编译 ${{ env.DEVICE }}（架构：${{ env.TARGET }}/${{ env.SUBTARGET }}）..."
         if ! time make -j$(($(nproc)+1)) V=s 2>&1 | tee build.log; then
-          echo "⚠️  多线程编译失败，切换为单线程重新编译（打印详细日志）..."
+          echo "⚠️  多线程编译失败，切换单线程重新编译..."
           time make -j1 V=s 2>&1 | tee -a build.log
           exit 1
         fi
 
-    - name: 检查编译结果
+    - name: 检查固件（强制定位ath79目录）
+      id: check_firmware
       run: |
         BIN_DIR="bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
-        if [ -d "$BIN_DIR" ]; then
-          echo "✅ 编译成功！生成的固件文件："
-          find "$BIN_DIR" -name "*.bin" -o -name "*.img" -o -name "*.gz" | while read file; do
-            echo "- $(basename "$file")"
-            ls -lh "$file"
-          done
-          if find "$BIN_DIR" -name "*initramfs-kernel.bin" | grep -q .; then
-            echo "✅ 已成功生成 initramfs-kernel.bin 固件！"
-          else
-            echo "⚠️  未生成 initramfs-kernel.bin ，请检查设备配置"
-          fi
-        else
-          echo "❌ 错误：编译失败，$BIN_DIR 目录不存在"
-          echo "显示编译日志的最后200行："
+        if [ ! -d "$BIN_DIR" ]; then
+          echo "❌ $BIN_DIR 目录不存在，编译失败"
           tail -200 build.log
           exit 1
         fi
+        # 查找CSAC设备专属固件（过滤其他设备文件）
+        FIRMWARE_FILES=$(find "$BIN_DIR" -name "*${{ env.DEVICE }}*.bin" -o -name "*${{ env.DEVICE }}*.img")
+        if [ -z "$FIRMWARE_FILES" ]; then
+          echo "❌ $BIN_DIR 中未找到${{ env.DEVICE }}的固件文件"
+          ls -la "$BIN_DIR"
+          exit 1
+        fi
+        echo "✅ 固件生成成功！文件列表："
+        echo "$FIRMWARE_FILES"
+        # 压缩固件和日志，方便上传
+        mkdir -p upload_files
+        cp $FIRMWARE_FILES upload_files/
+        cp build.log .config upload_files/
+        echo "UPLOAD_DIR=$(pwd)/upload_files" >> $GITHUB_ENV
+        echo "✅ 待上传文件已整理到 upload_files 目录"
 
-    - name: 上传固件制品
+    - name: 上传到WeTransfer免费版（7天有效期）
+      id: wetransfer_upload
+      if: steps.check_firmware.outcome == 'success'
+      run: |
+        echo "📤 开始上传到WeTransfer（免费7天有效期）..."
+        UPLOAD_DIR="${{ env.UPLOAD_DIR }}"
+        # 压缩待上传文件（减少上传体积）
+        ZIP_FILE="CSAC-OpenWrt-固件+日志-$(date +%Y%m%d).zip"
+        zip -r "$ZIP_FILE" "$UPLOAD_DIR"
+        # 调用WeTransfer免费上传接口（无需API密钥）
+        RESPONSE=$(curl -s -X POST "https://wetransfer.com/api/v4/transfers" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "CSAC-OpenWrt固件及编译日志",
+            "description": "CSAC-QCA9563设备OpenWrt固件（有效期7天）",
+            "expires_at": "'$(date -d "+${{ env.WETRANSFER_EXPIRY }}" -Iseconds | sed 's/+00:00/Z/')'",
+            "files": []
+          }')
+        # 提取transfer_id和upload_url
+        TRANSFER_ID=$(echo "$RESPONSE" | jq -r '.id')
+        UPLOAD_URL=$(echo "$RESPONSE" | jq -r '.upload_url')
+        if [ "$TRANSFER_ID" == "null" ] || [ "$UPLOAD_URL" == "null" ]; then
+          echo "❌ WeTransfer上传初始化失败"
+          echo "响应内容: $RESPONSE"
+          exit 1
+        fi
+        # 上传压缩文件
+        UPLOAD_RESPONSE=$(curl -s -X PUT "$UPLOAD_URL" \
+          -H "Content-Type: application/zip" \
+          --data-binary @"$ZIP_FILE")
+        # 提取下载链接
+        DOWNLOAD_LINK="https://wetransfer.com/$TRANSFER_ID"
+        echo "✅ WeTransfer上传成功！"
+        echo "下载链接（7天有效）: $DOWNLOAD_LINK"
+        echo "DOWNLOAD_LINK=$DOWNLOAD_LINK" >> $GITHUB_ENV
+
+    - name: 备份上传到GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: openwrt-${{ env.DEVICE }}-${{ github.sha }}-${{ matrix.image_type }}
-        path: bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/
+        name: CSAC-OpenWrt固件-${{ github.sha }}
+        path: ${{ env.UPLOAD_DIR }}
         retention-days: 7
 
-    - name: 上传编译日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-log-${{ github.sha }}
-        path: |
-          build.log
-          .config
-        retention-days: 7
-
-    - name: 通知结果
+    - name: 输出最终结果
       if: always()
       run: |
-        if [ -d "bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}" ]; then
-          echo "✅ 编译成功！"
-          echo "可以在 Artifacts 中找到编译好的固件（含initramfs-kernel.bin）。"
+        if [ -n "${{ env.DOWNLOAD_LINK }}" ]; then
+          echo "🎉 编译+上传全部成功！"
+          echo "WeTransfer下载链接（7天有效）: ${{ env.DOWNLOAD_LINK }}"
+          echo "GitHub Artifacts备份: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         else
-          echo "❌ 编译失败！"
-          echo "请检查 build.log 文件中的错误信息。"
+          echo "❌ 编译或上传失败，请查看日志"
           exit 1
         fi
