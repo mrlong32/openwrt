@@ -3468,47 +3468,38 @@ endef
 TARGET_DEVICES += zyxel_nbg6616
 
 define Device/csac_qca9563-csac
- $(call Device/generic)
- SOC := qca9563
- DEVICE_VENDOR := CSAC
- DEVICE_MODEL := Router
- DEVICE_VARIANT := QCA9563+QCA8337+QCA9886
- DEVICE_PACKAGES := \
- kmod-ath10k-ct \
- ath10k-firmware-qca9886-ct \
- kmod-gpio-beeper # 仅保留必要模块
+  # 基础配置：使用ath79通用设备模板（兼容QCA9563）
+  $(call Device/generic)
+  $(call Device/uImage-lzma)  # 标准LZMA压缩的uImage模板
+  $(call Device/squashfs)     # 标准squashfs根文件系统模板
 
- KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -M 0x8006000
- KERNEL_LOADADDR := 0x8006000
- KERNEL_ENTRY_POINT := 0x8006000
+  # 核心参数（必须）
+  SOC := qca9563
+  DEVICE_VENDOR := CSAC
+  DEVICE_MODEL := Router
+  DEVICE_VARIANT := QCA9563+QCA8337+QCA9886
+  DEVICE_DTS := qca9563_csac  # 你的设备树文件名（无需CONFIG）
+  SUPPORTED_DEVICES += csac,qca9563-csac
 
- IMAGES := factory.bin sysupgrade.bin
+  # 闪存大小：8MB设备设为7808k（8*1024 - 256 = 7808，预留256KB给固件头）
+  IMAGE_SIZE := 7808k
 
- # 修正镜像填充大小
- define Image/Build/factory
- $(call prepare_generic_squashfs,factory)
- $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
- $(STAGING_DIR_HOST)/bin/pad-to $$(( 14880 )) \
- $(BIN_DIR)/$(IMG_PREFIX)-factory.bin
- endef
+  # 必要驱动包（保留你需要的）
+  DEVICE_PACKAGES := \
+    kmod-ath10k-ct \
+    ath10k-firmware-qca9886-ct \
+    kmod-gpio-beeper
 
- define Image/Build/sysupgrade
- $(call prepare_generic_squashfs,sysupgrade)
- $(CP) $(KDIR)/vmlinux.bin.lzma $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
- $(STAGING_DIR_HOST)/bin/pad-to $$(( 14880 )) \
- $(BIN_DIR)/$(IMG_PREFIX)-sysupgrade.bin
- endef
+  # 内核构建：ath79/QCA9563标准参数（加载地址0x8006000是对的）
+  KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -A mips -O linux -T 0x8006000 -C none
 
- # 修正设备树配置
- DEVICE_DTS := qca9563_csac
-# DEVICE_DTS_CONFIG := config@0
-
- # 注释掉无效签名
- # define Image/Build/sign
- # ...
- # endef
-
- SUPPORTED_DEVICES += csac,qca9563-csac
+  # 标准镜像构建逻辑（合并内核+根文件系统，避免文件缺失）
+  IMAGES := factory.bin sysupgrade.bin
+  # factory.bin构建：标准模板+填充到指定大小
+  IMAGE/factory.bin := append-kernel | pad-to $$$$(BLOCKSIZE) | append-rootfs | pad-rootfs | check-size $$$$(IMAGE_SIZE)
+  # sysupgrade.bin构建：兼容OpenWrt升级逻辑
+  IMAGE/sysupgrade.bin := $$(IMAGE/factory.bin) | append-metadata | check-size $$$$(IMAGE_SIZE)
 endef
 
+# 注册设备
 TARGET_DEVICES += csac_qca9563-csac
