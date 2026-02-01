@@ -136,3 +136,20 @@ define Device/csac-csac-router
   PAGESIZE := 256
 endef
 TARGET_DEVICES += csac-csac-router
+
+
+define Device/csac-router
+  ATH_SOC := qca9563
+  DEVICE_VENDOR := CSAC
+  DEVICE_MODEL := Router
+  DEVICE_DTS := csac-router.dts
+  SUPPORTED_DEVICES := csac-router csac-csac-router
+  DEVICE_PACKAGES := \
+    kmod-ath10k ath10k-firmware-qca9886 \
+    luci luci-theme-bootstrap \
+    swconfig iw hostapd
+  IMAGE_SIZE := 16064k
+  BLOCKSIZE := 64k
+  PAGESIZE := 256
+endef
+TARGET_DEVICES += csac-router
