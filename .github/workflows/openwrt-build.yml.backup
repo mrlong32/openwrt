@@ -47,59 +47,12 @@ jobs:
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 V=s
         echo "编译完成！"
-
-    - name: 调试 - 显示所有生成的文件
-      run: |
-        echo "=== 显示所有生成的文件 ==="
-        echo "bin/目录结构:"
-        ls -la bin/
-        echo -e "\nbin/targets/目录结构:"
-        ls -la bin/targets/ath79/
-        echo -e "\nbin/targets/ath79/generic/目录结构:"
-        ls -la bin/targets/ath79/generic/
-        echo -e "\n查找所有*.bin文件:"
-        find bin/targets/ath79/generic/ -name "*.bin" -type f
     - name: 收集编译产物
       run: |
         mkdir -p ./artifact
-        echo "=== 尝试复制CSAC固件文件 ==="
-        
-        # 尝试多种模式查找CSAC固件
-        copy_success=0
-        
-        # 模式1: *csac*
-        if cp -f bin/targets/ath79/generic/*csac* ./artifact/ 2>/dev/null; then
-          echo "✅ 成功复制*csac*文件"
-          copy_success=1
-        else
-          echo "⚠️  未找到*csac*文件"
-        fi
-        
-        # 模式2: openwrt-ath79-generic-csac*
-        if cp -f bin/targets/ath79/generic/openwrt-ath79-generic-csac* ./artifact/ 2>/dev/null; then
-          echo "✅ 成功复制openwrt-ath79-generic-csac*文件"
-          copy_success=1
-        else
-          echo "⚠️  未找到openwrt-ath79-generic-csac*文件"
-        fi
-        
-        # 模式3: 所有.bin文件（如果上面都失败）
-        if [ $copy_success -eq 0 ]; then
-          echo "⚠️  未找到CSAC特定固件，复制所有.bin文件"
-          cp -f bin/targets/ath79/generic/*.bin ./artifact/
-        fi
-        
-        # 复制通用文件
-        echo -e "\n=== 复制通用文件 ==="
-        cp -f bin/targets/ath79/generic/*.manifest ./artifact/ 2>/dev/null || echo "⚠️  未找到manifest文件"
-        cp -f bin/targets/ath79/generic/*.json ./artifact/ 2>/dev/null || echo "⚠️  未找到json文件"
-        cp -f bin/targets/ath79/generic/*.txt ./artifact/ 2>/dev/null || echo "⚠️  未找到txt文件"
+        cp -f bin/targets/ath79/generic/*csac* ./artifact/
+        cp -f bin/targets/ath79/generic/openwrt-ath79-generic.manifest ./artifact/
         cp -f .config ./artifact/config.buildinfo
-        cp -f .config.backup ./artifact/config.backup
-        
-        # 显示复制结果
-        echo -e "\n=== 最终artifact目录内容 ==="
-        ls -la ./artifact/
     - name: 上传编译产物
       uses: actions/upload-artifact@v4
       with:
