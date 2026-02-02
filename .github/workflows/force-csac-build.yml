@@ -1,0 +1,45 @@
+name: Force Build CSAC Router
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        repository: mrlong32/openwrt
+        token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Prepare environment
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install build-essential clang flex bison g++ gawk             gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev             file wget curl python3 python3-pip python3-ply python3-yaml
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "Asia/Shanghai"
+    - name: Force build CSAC firmware
+      run: |
+        chmod +x force_csac_build.sh
+        ./force_csac_build.sh
+    - name: Package artifacts
+      run: |
+        mkdir -p ./artifact
+        # 复制所有文件
+        cp -f bin/targets/ath79/generic/* ./artifact/ 2>/dev/null || true
+        cp -f .config ./artifact/config.forced
+        # 显示结果
+        echo "=== Artifact内容 ==="
+        ls -la ./artifact/
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: forced-csac-firmware
+        path: ./artifact/
+        retention-days: 30
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -rf ./artifact
+        rm -rf ./bin
+        rm -rf ./build_dir
