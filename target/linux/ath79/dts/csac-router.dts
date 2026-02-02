@@ -84,33 +84,47 @@
 };
 &mdio0 {
 	status = "okay";
+
+	phy-mask = <0>;
+
 	phy0: ethernet-phy@0 {
 		reg = <0>;
 		phy-mode = "sgmii";
+
 		qca,ar8327-initvals = <
-			0x04 0x07600000 /* PORT0 PAD MODE CTRL */
-			0x10 0x80000080 /* POWER_ON_STRAP */
-			0x50 0xc737c737 /* LED_CTRL0 */
-			0x54 0x00000000 /* LED_CTRL1 */
+			0x04 0x00080080 /* PORT0 PAD MODE CTRL */
+			0x10 0x81000080 /* POWER_ON_STRIP */
+			0x50 0xcc35cc35 /* LED_CTRL0 */
+			0x54 0xcb37cb37 /* LED_CTRL1 */
 			0x58 0x00000000 /* LED_CTRL2 */
-			0x5c 0x00000000 /* LED_CTRL3 */
-			0x7c 0x00000000 /* PORT0_STATUS */
-			0x94 0x00000000 /* PORT6_STATUS */
-		>;
+			0x5c 0x00f3cf00 /* LED_CTRL3 */
+			0x7c 0x0000007e /* PORT0_STATUS */
+			>;
 	};
 };
+
 &eth0 {
 	status = "okay";
+	nvmem-cells = <&macaddr_art_0>;
+	nvmem-cell-names = "mac-address";
+
+	pll-data = <0x03000101 0x00000101 0x00001919>;
+
 	phy-mode = "sgmii";
 	phy-handle = <&phy0>;
 };
+
 &pcie {
 	status = "okay";
+
 	wifi@0,0 {
-		compatible = "qcom,ath10k";
+		compatible = "pci168c,0056";
 		reg = <0x0000 0 0 0 0>;
+		nvmem-cells = <&precal_art_5000>;
+		nvmem-cell-names = "pre-calibration";
 	};
 };
+
 &uart {
 	status = "okay";
 };

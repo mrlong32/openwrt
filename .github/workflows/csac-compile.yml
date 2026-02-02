@@ -1,0 +1,63 @@
+
+name: OpenWrt CSAC Compile
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: 0 0 * * 0  # 每周日编译
+  workflow_dispatch:    # 手动触发
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    - name: Update feeds
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+    - name: Load CSAC configuration
+      run: |
+        echo 'CONFIG_TARGET_ath79=y' >> .config
+        echo 'CONFIG_TARGET_ath79_generic=y' >> .config
+        echo 'CONFIG_TARGET_ath79_generic_DEVICE_xwrt_csac=y' >> .config
+        # 无线驱动配置
+        echo 'CONFIG_PACKAGE_kmod-ath10k-ct=y' >> .config
+        echo 'CONFIG_PACKAGE_ath10k-firmware-qca9886-ct=y' >> .config
+        # 交换芯片配置
+        echo 'CONFIG_PACKAGE_kmod-switch-qca8k=y' >> .config
+        echo 'CONFIG_PACKAGE_swconfig=y' >> .config
+        # USB支持
+        echo 'CONFIG_PACKAGE_kmod-usb-core=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-usb2=y' >> .config
+        # Luci界面
+        echo 'CONFIG_PACKAGE_luci=y' >> .config
+        echo 'CONFIG_PACKAGE_luci-theme-openwrt-2020=y' >> .config
+        echo 'CONFIG_PACKAGE_luci-app-opkg=y' >> .config
+        # 其他工具
+        echo 'CONFIG_PACKAGE_firewall=y' >> .config
+        echo 'CONFIG_PACKAGE_wireless-tools=y' >> .config
+        echo 'CONFIG_PACKAGE_iw=y' >> .config
+        # 编译优化
+        echo 'CONFIG_DEVEL=y' >> .config
+        echo 'CONFIG_BUILD_OPTIMIZE=y' >> .config
+        echo 'CONFIG_BUILD_DEBUG=n' >> .config
+    - name: Update configuration
+      run: |
+        make defconfig
+    - name: Download dependencies
+      run: |
+        make download -j$(nproc)
+    - name: Build firmware
+      run: |
+        make -j$(nproc) || make -j1 V=s
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-csac-firmware
+        path: bin/targets/ath79/generic/*.bin
