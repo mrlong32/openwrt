@@ -49,3 +49,4 @@ CONFIG_TARGET_PROFILE=DEVICE_csac_router
 CONFIG_TARGET_ath79_generic_DEVICE_csac_router=y
 # 禁用其他设备
 # CONFIG_TARGET_ath79_generic_DEVICE_generic=y
+# # CONFIG_TARGET_ath79_generic_DEVICE_8dev_carambola2=y
