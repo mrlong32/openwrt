@@ -60,3 +60,4 @@ jobs:
         name: openwrt-csac-firmware
         path: bin/targets/ath79/generic/*.bin
     timeout-minutes: 120
+    
